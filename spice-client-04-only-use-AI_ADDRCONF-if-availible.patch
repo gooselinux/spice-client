@@ -1,0 +1,29 @@
+From 6108a6ce5f74c1d466b6ab3e453f2ecbd2dd5a9d Mon Sep 17 00:00:00 2001
+From: Alexander Larsson <alexl@redhat.com>
+Date: Wed, 3 Mar 2010 16:11:48 +0100
+Subject: [PATCH] Only use AI_ADDRCONF if availible #566444
+
+AI_ADDRCONF not availible on winXP, so this fixes windows build.
+---
+ client/red_peer.cpp |    5 ++++-
+ 1 files changed, 4 insertions(+), 1 deletions(-)
+
+diff --git a/client/red_peer.cpp b/client/red_peer.cpp
+index 007559c..a8f1236 100644
+--- a/client/red_peer.cpp
++++ b/client/red_peer.cpp
+@@ -120,7 +120,10 @@ void RedPeer::connect_unsecure(const char* host, int portnr)
+     ASSERT(_ctx == NULL && _ssl == NULL && _peer == INVALID_SOCKET);
+     try {
+         memset(&ai,0, sizeof(ai));
+-        ai.ai_flags = AI_CANONNAME | AI_ADDRCONFIG;
++        ai.ai_flags = AI_CANONNAME;
++#ifdef AI_ADDRCONFIG
++        ai.ai_flags |= AI_ADDRCONFIG;
++#endif
+         ai.ai_family = PF_UNSPEC;
+         ai.ai_socktype = SOCK_STREAM;
+         snprintf(port, sizeof(port), "%d", portnr);
+-- 
+1.6.6.1
+

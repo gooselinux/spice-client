@@ -1,0 +1,777 @@
+From 17a1627f6783ccfb0d98a7ba0a0608b926d5e6fb Mon Sep 17 00:00:00 2001
+From: Alon Levy <alevy@redhat.com>
+Date: Tue, 29 Jun 2010 19:07:00 +0300
+Subject: [PATCH 1/2] make opengl optional, disabled by default #482556
+
+The OpenGL renderer isn't really useful right now, its not quite up
+to date, its not really faster than software and it only supports a limited
+subset of drivers. So, lets disable it for now.
+
+Long term opengl rendering of the 2d part of spice is important if we want
+to combine 2d and 3d rendering (say if spice adds opengl support in the
+protocol). But until then this is isn't useful for normal use.
+
+Backported from upstream cfc1e95bda0e150b3de225c3572bb1004dad070e
+---
+ client/Makefile.am            |   19 +++++++++++++------
+ client/common.h               |    2 ++
+ client/gl_canvas.cpp          |    1 -
+ client/glc.cpp                |    1 -
+ client/glext_proto.h          |    2 ++
+ client/red_window.h           |    6 +++---
+ client/screen.cpp             |    2 ++
+ client/screen.h               |    6 ++++--
+ client/x11/Makefile.am        |   24 +++++++++++++++++-------
+ client/x11/pixels_source_p.h  |   13 ++++++++++++-
+ client/x11/platform.cpp       |   14 +++++++++++++-
+ client/x11/red_drawable.cpp   |   16 +++++++++++++++-
+ client/x11/red_pixmap_gl.cpp  |    2 --
+ client/x11/red_window.cpp     |   26 ++++++++++++++++++--------
+ client/x11/red_window_p.h     |    9 +++++++++
+ client/x11/x_platform.h       |    5 +++++
+ client/configure.ac.shared    |   24 +++++++++++++++++-------
+ 20 files changed, 134 insertions(+), 50 deletions(-)
+
+diff --git a/client/Makefile.am b/client/Makefile.am
+index cf5e373..fa5e1e3 100644
+--- a/client/Makefile.am
++++ b/client/Makefile.am
+@@ -3,6 +3,17 @@ NULL =
+ SUBDIRS = $(red_target)
+ DIST_SUBDIRS = x11 #windows
+
++if SUPPORT_GL
++GL_SRCS =				\
++	gl_canvas.cpp			\
++	glc.cpp				\
++	red_gl_canvas.cpp		\
++	red_gl_canvas.h			\
++	red_pixmap_gl.h
++else
++GL_SRCS =
++endif
++
+ RED_COMMON_SRCS =	 		\
+ 	application.cpp			\
+ 	application.h			\
+@@ -31,10 +42,6 @@ RED_COMMON_SRCS =	 		\
+ 	foreign_menu.cpp		\
+ 	foreign_menu.h			\
+ 	foreign_menu_prot.h		\
+-	red_gl_canvas.cpp		\
+-	red_gl_canvas.h			\
+-	gl_canvas.cpp			\
+-	glc.cpp				\
+ 	glext_proto.h			\
+ 	glz_decoded_image.h		\
+ 	glz_decoder_config.h		\
+@@ -68,7 +75,6 @@ RED_COMMON_SRCS =	 		\
+ 	red_peer.cpp			\
+ 	red_peer.h			\
+ 	red_pixmap_cairo.h		\
+-	red_pixmap_gl.h			\
+ 	red_pixmap.h			\
+ 	red_types.h			\
+ 	red_window.h			\
+@@ -94,7 +100,8 @@ RED_COMMON_SRCS =	 		\
+ 	$(NULL)
+
+ EXTRA_DIST = $(RED_COMMON_SRCS) \
+-	x11/ffmpeg_inc.h.in
++	x11/ffmpeg_inc.h.in	\
++	$(GL_SRCS)
+
+ DISTCLEANFILES = x11/ffmpeg_inc.h
+
+diff --git a/client/common.h b/client/common.h
+index 69253db..9b369ed 100644
+--- a/client/common.h
++++ b/client/common.h
+@@ -46,8 +46,10 @@
+ #else
+ #include <unistd.h>
+ #include <X11/X.h>
++#ifdef USE_OGL
+ #include <GL/glx.h>
+ #endif
++#endif
+
+ #ifdef __GNUC__
+     #if __SIZEOF_POINTER__ == 8
+diff --git a/client/gl_canvas.cpp b/client/gl_canvas.cpp
+index c8e6509..c61ce73 100644
+--- a/client/gl_canvas.cpp
++++ b/client/gl_canvas.cpp
+@@ -15,7 +15,6 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+ #include "common.h"
+ #include "gl_canvas.c"
+
+diff --git a/client/glc.cpp b/client/glc.cpp
+index cf818ca..00d589e 100644
+--- a/client/glc.cpp
++++ b/client/glc.cpp
+@@ -15,7 +15,6 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+ #include "common.h"
+ #include "glc.c"
+
+diff --git a/client/glext_proto.h b/client/glext_proto.h
+index 0ad39fe..dbacffb 100644
+--- a/client/glext_proto.h
++++ b/client/glext_proto.h
+@@ -1,6 +1,8 @@
+ #ifndef _H_GLEXT_PROTO
+ #define _H_GLEXT_PROTO
+
++#ifndef GL_GLEXT_PROTOTYPES
+ #define GL_GLEXT_PROTOTYPES
++#endif
+
+ #endif
+diff --git a/client/red_window.h b/client/red_window.h
+index 65d5efd..7028196 100644
+--- a/client/red_window.h
++++ b/client/red_window.h
+@@ -78,12 +78,12 @@ public:
+     void set_render_pbuff(RedPbuffer pbuff);
+     void set_render_fbo(GLuint fbo);
+     void set_gl_context(RedGlContext context);
+-#endif
+-
+-    int get_screen_num();
+
+     void set_type_gl();
+     void unset_type_gl();
++#endif
++
++    int get_screen_num();
+
+     static void init();
+     static void cleanup();
+diff --git a/client/screen.cpp b/client/screen.cpp
+index 914a7fd..709d9ac 100644
+--- a/client/screen.cpp
++++ b/client/screen.cpp
+@@ -776,6 +776,7 @@ void RedScreen::interrupt_update()
+     _update_interrupt_trigger->trigger();
+ }
+
++#ifdef USE_OGL
+ void RedScreen::set_type_gl()
+ {
+     _window.set_type_gl();
+@@ -785,4 +786,5 @@ void RedScreen::unset_type_gl()
+ {
+     _window.unset_type_gl();
+ }
++#endif // USE_OGL
+
+diff --git a/client/screen.h b/client/screen.h
+index b78f838..d0635cf 100644
+--- a/client/screen.h
++++ b/client/screen.h
+@@ -21,7 +21,9 @@
+ #include "common.h"
+ #include "region.h"
+ #include "red_key.h"
++#ifdef USE_OGL
+ #include "GL/gl.h"
++#endif // USE_OGL
+
+ #include "red_window.h"
+ #include "platform.h"
+@@ -88,12 +90,12 @@ public:
+ #ifdef USE_OGL
+     void untouch_context();
+     bool need_recreate_context_gl();
++    void set_type_gl();
++    void unset_type_gl();
+ #endif
+     void set_update_interrupt_trigger(EventSources::Trigger *trigger);
+     bool update_by_interrupt();
+     void interrupt_update();
+-    void set_type_gl();
+-    void unset_type_gl();
+
+     void update();
+
+diff --git a/client/x11/Makefile.am b/client/x11/Makefile.am
+index 327733c..e0f93e2 100644
+--- a/client/x11/Makefile.am
++++ b/client/x11/Makefile.am
+@@ -5,13 +5,14 @@ CLIENT_DIR=$(top_srcdir)
+
+ SUBDIRS = images
+
++
++
+ INCLUDES = \
+ 	-DCAIRO_CANVAS_ACCESS_TEST			\
+ 	-DCAIRO_CANVAS_CACHE				\
+ 	-DCAIRO_CANVAS_CACH_IS_SHARED			\
+ 	-DCAIRO_CANVAS_NO_CHUNKS			\
+ 	-DUSE_GLZ					\
+-	-DUSE_OGL					\
+ 	-I. 						\
+ 	-I..						\
+ 	-I$(COMMON_DIR)					\
+@@ -56,10 +57,6 @@ RED_COMMON_SRCS = 					\
+  	$(CLIENT_DIR)/foreign_menu.cpp			\
+  	$(CLIENT_DIR)/foreign_menu.h			\
+  	$(CLIENT_DIR)/foreign_menu_prot.h		\
+-	$(CLIENT_DIR)/red_gl_canvas.cpp			\
+-	$(CLIENT_DIR)/red_gl_canvas.h			\
+-	$(CLIENT_DIR)/gl_canvas.cpp			\
+-	$(CLIENT_DIR)/glc.cpp				\
+ 	$(CLIENT_DIR)/glext_proto.h			\
+ 	$(CLIENT_DIR)/glz_decoded_image.h		\
+ 	$(CLIENT_DIR)/glz_decoder_config.h		\
+@@ -90,7 +87,6 @@ RED_COMMON_SRCS = 					\
+ 	$(CLIENT_DIR)/red_peer.cpp			\
+ 	$(CLIENT_DIR)/red_peer.h			\
+ 	$(CLIENT_DIR)/red_pixmap_cairo.h		\
+-	$(CLIENT_DIR)/red_pixmap_gl.h			\
+ 	$(CLIENT_DIR)/red_pixmap.h			\
+ 	$(CLIENT_DIR)/red_types.h			\
+ 	$(CLIENT_DIR)/red_window.h			\
+@@ -109,6 +105,20 @@ RED_COMMON_SRCS = 					\
+ 	$(CLIENT_DIR)/icon.h                        	\
+ 	$(NULL)
+
++if SUPPORT_GL
++GL_CFLAGS=-DGL_GLEXT_PROTOTYPES -DUSE_OGL
++RED_OGL_SRCS =						\
++	$(CLIENT_DIR)/gl_canvas.cpp			\
++	$(CLIENT_DIR)/glc.cpp				\
++	$(CLIENT_DIR)/red_gl_canvas.cpp			\
++	$(CLIENT_DIR)/red_gl_canvas.h			\
++	$(CLIENT_DIR)/red_pixmap_gl.h			\
++	red_pixmap_gl.cpp
++else
++GL_CFLAGS=
++RED_OGL_SRCS =
++endif
++
+ libexec_PROGRAMS = spicec
+
+ spicec_SOURCES =			\
+@@ -130,7 +140,6 @@ spicec_SOURCES =			\
+ 	red_drawable.cpp		\
+ 	red_pixmap.cpp			\
+ 	red_pixmap_cairo.cpp		\
+-	red_pixmap_gl.cpp		\
+ 	red_window.cpp			\
+ 	red_window_p.h			\
+ 	res.cpp				\
+@@ -140,6 +149,7 @@ spicec_SOURCES =			\
+ 	x_icon.h			\
+ 	x_platform.h			\
+ 	$(RED_COMMON_SRCS)		\
++	$(RED_OGL_SRCS)			\
+ 	$(NULL)
+
+ spicec_LDFLAGS = \
+diff --git a/client/x11/pixels_source_p.h b/client/x11/pixels_source_p.h
+index 69d6998..0fbd075 100644
+--- a/client/x11/pixels_source_p.h
++++ b/client/x11/pixels_source_p.h
+@@ -18,12 +18,17 @@
+ #ifndef _H_PIXELE_SOURSR_P
+ #define _H_PIXELE_SOURSR_P
+
+-#define GL_GLEXT_PROTOTYPES
+ #include <X11/X.h>
++#ifdef USE_OGL
+ #include <GL/glu.h>
++#endif // USE_OGL
++#include <X11/Xdefs.h>
++#include <X11/Xutil.h> // required by Xshm.h, but not included by it
+ #include <X11/extensions/XShm.h>
+ #include "red_window.h"
++#ifdef USE_OGL
+ #include "red_pixmap_gl.h"
++#endif // USE_OGL
+ #include "cairo.h"
+
+ enum {
+@@ -31,8 +36,10 @@ enum {
+     PIXELS_SOURCE_TYPE_X_DRAWABLE,
+     PIXELS_SOURCE_TYPE_XSHM_DRAWABLE,
+     PIXELS_SOURCE_TYPE_PIXMAP,
++#ifdef USE_OGL
+     PIXELS_SOURCE_TYPE_GL_TEXTURE,
+     PIXELS_SOURCE_TYPE_GL_DRAWABLE,
++#endif // USE_OGL
+ };
+
+ struct PixelsSource_p {
+@@ -42,12 +49,14 @@ struct PixelsSource_p {
+             Drawable drawable;
+             GC gc;
+             int width, height;
++#ifdef USE_OGL
+             RenderType rendertype;
+             union {
+                 GLXPbuffer pbuff;
+                 GLuint fbo;
+             };
+             RedGlContext context;
++#endif // USE_OGL
+         } x_drawable;
+
+         struct {
+@@ -61,6 +70,7 @@ struct PixelsSource_p {
+             cairo_surface_t* cairo_surf;
+         } pixmap;
+
++#ifdef USE_OGL
+         struct {
+             RenderType rendertype;
+             Win win;
+@@ -74,6 +84,7 @@ struct PixelsSource_p {
+             };
+             RedGlContext context;
+         } gl;
++#endif // USE_OGL
+     };
+ };
+
+diff --git a/client/x11/platform.cpp b/client/x11/platform.cpp
+index 80bbdb4..e0f7dac 100644
+--- a/client/x11/platform.cpp
++++ b/client/x11/platform.cpp
+@@ -67,7 +67,9 @@
+ static Display* x_display = NULL;
+ static bool x_shm_avail = false;
+ static XVisualInfo **vinfo = NULL;
++#ifdef USE_OGL
+ static GLXFBConfig **fb_config;
++#endif // USE_OGL
+
+ static XContext win_proc_context;
+ static ProcessLoop* main_loop = NULL;
+@@ -196,10 +198,12 @@ XVisualInfo** XPlatform::get_vinfo()
+     return vinfo;
+ }
+
++#ifdef USE_OGL
+ GLXFBConfig** XPlatform::get_fbconfig()
+ {
+     return fb_config;
+ }
++#endif // USE_OGL
+
+ void XPlatform::set_win_proc(Window win, win_proc_t proc)
+ {
+@@ -1994,6 +1998,7 @@ static void cleanup(void)
+         delete vinfo;
+         vinfo = NULL;
+     }
++#ifdef USE_OGL
+     if (fb_config) {
+         for (i = 0; i < ScreenCount(x_display); ++i) {
+             XFree(fb_config[i]);
+@@ -2001,6 +2006,7 @@ static void cleanup(void)
+         delete fb_config;
+         fb_config = NULL;
+     }
++#endif // USE_OGL
+ }
+
+ static void quit_handler(int sig)
+@@ -2128,7 +2134,9 @@ static XVisualInfo* get_x_vis_info(int screen)
+
+ void Platform::init()
+ {
++#ifdef USE_OGL
+     int err, ev;
++#endif // USE_OGL
+     int threads_enable;
+     int connection_fd;
+     socklen_t sock_len = sizeof(struct sockaddr);
+@@ -2151,6 +2159,7 @@ void Platform::init()
+
+     vinfo = new XVisualInfo *[ScreenCount(x_display)];
+     memset(vinfo, 0, sizeof(XVisualInfo *) * ScreenCount(x_display));
++#ifdef USE_OGL
+     fb_config = new GLXFBConfig *[ScreenCount(x_display)];
+     memset(fb_config, 0, sizeof(GLXFBConfig *) * ScreenCount(x_display));
+
+@@ -2181,13 +2190,16 @@ void Platform::init()
+                 THROW("XGetVisualInfo failed");
+             }
+         }
+-    } else {
++    } else
++#else
++    {
+         for (int i = 0; i < ScreenCount(x_display); ++i) {
+             if (!(vinfo[i] = get_x_vis_info(i))) {
+                 THROW("XGetVisualInfo failed");
+             }
+         }
+     }
++#endif // USE_OGL
+
+     XSetErrorHandler(x_error_handler);
+     XSetIOErrorHandler(x_io_error_handler);
+diff --git a/client/x11/red_drawable.cpp b/client/x11/red_drawable.cpp
+index 4436152..9f9126f 100644
+--- a/client/x11/red_drawable.cpp
++++ b/client/x11/red_drawable.cpp
+@@ -15,13 +15,14 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+ #include "common.h"
+ #include "red_drawable.h"
+ #include "pixels_source_p.h"
+ #include "debug.h"
+ #include "x_platform.h"
+ #include "utils.h"
++
++#ifdef USE_OGL
+ #include "gl_utils.h"
+ #include <GL/gl.h>
+ #include <GL/glu.h>
+@@ -132,6 +133,7 @@ static inline void copy_to_gldrawable_from_pixmap(const RedDrawable_p* dest,
+         glXMakeCurrent(XPlatform::get_display(), pbuffer, context);
+     }
+ }
++#endif // USE_OGL
+
+ static inline void copy_to_drawable_from_drawable(const RedDrawable_p* dest,
+                                                   const Rect& area,
+@@ -204,6 +206,7 @@ static inline void copy_to_x_drawable(const RedDrawable_p* dest,
+     }
+ }
+
++#ifdef USE_OGL
+ static inline void copy_to_gl_drawable(const RedDrawable_p* dest,
+                                        const Rect& area,
+                                        const Point& offset,
+@@ -221,6 +224,7 @@ static inline void copy_to_gl_drawable(const RedDrawable_p* dest,
+         THROW("invalid source type %d", source->type);
+     }
+ }
++#endif // USE_OGL
+
+ static inline void copy_to_pixmap_from_drawable(const RedDrawable_p* dest,
+                                                 const Rect& area,
+@@ -271,6 +275,7 @@ static inline void copy_to_pixmap_from_pixmap(const RedDrawable_p* dest,
+     cairo_fill(cairo);
+ }
+
++#ifdef USE_OGL
+ static inline void copy_to_pixmap_from_gltexture(const RedDrawable_p* dest,
+                                                  const Rect& area,
+                                                  const Point& offset,
+@@ -314,6 +319,7 @@ static inline void copy_to_pixmap_from_gltexture(const RedDrawable_p* dest,
+         glXMakeCurrent(XPlatform::get_display(), win, context);
+     }
+ }
++#endif // USE_OGL
+
+ static inline void copy_to_pixmap(const RedDrawable_p* dest,
+                                   const Rect& area,
+@@ -322,9 +328,11 @@ static inline void copy_to_pixmap(const RedDrawable_p* dest,
+                                   int src_x, int src_y)
+ {
+     switch (source->type) {
++#ifdef USE_OGL
+     case PIXELS_SOURCE_TYPE_GL_TEXTURE:
+         copy_to_pixmap_from_gltexture(dest, area, offset, source, src_x, src_y);
+         break;
++#endif // USE_OGL
+     case PIXELS_SOURCE_TYPE_X_DRAWABLE:
+         copy_to_pixmap_from_drawable(dest, area, offset, source, src_x, src_y);
+         break;
+@@ -344,10 +352,12 @@ void RedDrawable::copy_pixels(const PixelsSource& src, int src_x, int src_y, con
+     PixelsSource_p* source = (PixelsSource_p*)src.get_opaque();
+     RedDrawable_p* dest = (RedDrawable_p*)get_opaque();
+     switch (dest->source.type) {
++#ifdef USE_OGL
+     case PIXELS_SOURCE_TYPE_GL_DRAWABLE:
+         copy_to_gl_drawable(dest, area, _origin, source, src_x + src._origin.x,
+                             src_y + src._origin.y);
+         break;
++#endif // USE_OGL
+     case PIXELS_SOURCE_TYPE_X_DRAWABLE:
+         copy_to_x_drawable(dest, area, _origin, source, src_x + src._origin.x,
+                            src_y + src._origin.y);
+@@ -569,6 +579,7 @@ static inline void fill_drawable(RedDrawable_p* dest, const Rect& area, rgb32_t
+                    area.right - area.left, area.bottom - area.top);
+ }
+
++#ifdef USE_OGL
+ static inline void fill_gl_drawable(RedDrawable_p* dest, const Rect& area, rgb32_t color,
+                                     const Point& offset)
+ {
+@@ -602,6 +613,7 @@ static inline void fill_gl_drawable(RedDrawable_p* dest, const Rect& area, rgb32
+
+     glColor3f(1, 1, 1);
+ }
++#endif // USE_OGL
+
+ static inline void fill_pixmap(RedDrawable_p* dest, const Rect& area, rgb32_t color,
+                                const Point& offset)
+@@ -623,9 +635,11 @@ void RedDrawable::fill_rect(const Rect& area, rgb32_t color)
+ {
+     RedDrawable_p* dest = (RedDrawable_p*)get_opaque();
+     switch (dest->source.type) {
++#ifdef USE_OGL
+     case PIXELS_SOURCE_TYPE_GL_DRAWABLE:
+         fill_gl_drawable(dest, area, color, _origin);
+         break;
++#endif // USE_OGL
+     case PIXELS_SOURCE_TYPE_X_DRAWABLE:
+         fill_drawable(dest, area, color, _origin);
+         break;
+diff --git a/client/x11/red_pixmap_gl.cpp b/client/x11/red_pixmap_gl.cpp
+index 886bb0b..898193d 100644
+--- a/client/x11/red_pixmap_gl.cpp
++++ b/client/x11/red_pixmap_gl.cpp
+@@ -15,8 +15,6 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+-
+ #include <GL/gl.h>
+ #include <GL/glu.h>
+ #include <GL/glext.h>
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index 77c27ee..47ade31 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -15,7 +15,6 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+ #include "common.h"
+ #include <X11/Xlib.h>
+ #include <X11/Xresource.h>
+@@ -23,23 +22,26 @@
+ #include <X11/Xatom.h>
+ #include <X11/XKBlib.h>
+
++#ifdef USE_OGL
+ #include <GL/gl.h>
+ #include <GL/glu.h>
+ #include <GL/glx.h>
+ #include <GL/glext.h>
++#endif // USE_OGL
+ #include <stdio.h>
+
+ #include "red_window.h"
+ #include "utils.h"
+-#include "gl_utils.h"
+ #include "debug.h"
+ #include "platform.h"
+ #include "x_platform.h"
+ #include "pixels_source_p.h"
+ #include "red.h"
+ #include "region.h"
++#ifdef USE_OGL
++#include "gl_utils.h"
+ #include "red_pixmap_gl.h"
+-#include "red_pixmap_gl.h"
++#endif // USE_OGL
+ #include "x_icon.h"
+
+
+@@ -956,6 +958,7 @@ void RedWindow_p::wait_for_unmap()
+     }
+ }
+
++#ifdef USE_OGL
+ void RedWindow_p::set_glx(int width, int height)
+ {
+     if (_glcont_copy) {
+@@ -973,6 +976,7 @@ void RedWindow_p::set_glx(int width, int height)
+         GLC_ERROR_TEST_FINISH;
+     }
+ }
++#endif // USE_OGL
+
+ void RedWindow_p::set_minmax(PixelsSource_p& pix_source, int width, int height)
+ {
+@@ -1001,7 +1005,9 @@ Cursor RedWindow_p::create_invisible_cursor(Window window)
+
+ RedWindow_p::RedWindow_p()
+     : _win (None)
++#ifdef USE_OGL
+     , _glcont_copy (NULL)
++#endif // USE_OGL
+     , _icon (NULL)
+     , _focused (false)
+     , _ignore_foucs (false)
+@@ -1031,10 +1037,12 @@ void RedWindow_p::destroy(RedWindow& red_window, PixelsSource_p& pix_source)
+     XFreeCursor(x_display, _invisible_cursor);
+     _invisible_cursor = None;
+     XDeleteContext(x_display, window, user_data_context);
++#ifdef USE_OGL
+     if (_glcont_copy) {
+         glXDestroyContext(x_display, _glcont_copy);
+         _glcont_copy = NULL;
+     }
++#endif // USE_OGL
+     XDestroyWindow(x_display, window);
+     XFreeColormap(x_display, _colormap);
+     XFreeGC(x_display, pix_source.x_drawable.gc);
+@@ -1839,6 +1847,7 @@ bool RedWindow::get_mouse_anchor_point(Point& pt)
+     return true;
+ }
+
++#ifdef USE_OGL
+ RedGlContext RedWindow::create_context_gl()
+ {
+     if (XPlatform::get_fbconfig()[_screen]) {
+@@ -1870,11 +1879,6 @@ void RedWindow::untouch_context()
+     glXMakeCurrent(x_display, 0, 0);
+ }
+
+-int RedWindow::get_screen_num()
+-{
+-    return _screen;
+-}
+-
+ void RedWindow::set_type_gl()
+ {
+     PixelsSource_p *pix_source = (PixelsSource_p*)get_opaque();
+@@ -1911,6 +1915,12 @@ void RedWindow::set_render_fbo(GLuint fbo)
+     pix_source->x_drawable.rendertype = RENDER_TYPE_FBO;
+     pix_source->x_drawable.fbo = fbo;
+ }
++#endif // USE_OGL
++
++int RedWindow::get_screen_num()
++{
++    return _screen;
++}
+
+ void RedWindow::on_focus_in()
+ {
+diff --git a/client/x11/red_window_p.h b/client/x11/red_window_p.h
+index 06440f9..38cd1b0 100644
+--- a/client/x11/red_window_p.h
++++ b/client/x11/red_window_p.h
+@@ -18,12 +18,17 @@
+ #ifndef _H_RED_WINDOW_P
+ #define _H_RED_WINDOW_P
+
++#ifdef USE_OGL
+ #include <GL/glx.h>
++#endif // USE_OGL
++#include <X11/Xdefs.h>
+ #include <X11/Xlib.h>
+
+ typedef Window Win;
++#ifdef USE_OGL
+ typedef GLXContext RedGlContext;
+ typedef GLXPbuffer RedPbuffer;
++#endif // USE_OGL
+
+ class RedWindow;
+ class Icon;
+@@ -49,7 +54,9 @@ public:
+     static void win_proc(XEvent& event);
+     static Cursor create_invisible_cursor(Window window);
+
++#ifdef USE_OGL
+     void set_glx(int width, int height);
++#endif // USE_OGL
+
+ protected:
+     int _screen;
+@@ -58,7 +65,9 @@ protected:
+     bool _visibale;
+     bool _expect_parent;
+     Point _show_pos;
++#ifdef USE_OGL
+     GLXContext _glcont_copy;
++#endif // USE_OGL
+     Icon* _icon;
+     bool _focused;
+     bool _ignore_foucs;
+diff --git a/client/x11/x_platform.h b/client/x11/x_platform.h
+index eafa02d..52404e1 100644
+--- a/client/x11/x_platform.h
++++ b/client/x11/x_platform.h
+@@ -18,11 +18,16 @@
+ #ifndef _H_XPLATFORM
+ #define _H_XPLATFORM
+
++#include <X11/Xdefs.h>
++#include <X11/Xutil.h>
++
+ class XPlatform {
+ public:
+     static Display* get_display();
+     static XVisualInfo** get_vinfo();
++#ifdef USE_OGL
+     static GLXFBConfig** get_fbconfig();
++#endif // USE_OGL
+
+     typedef void (*win_proc_t)(XEvent& event);
+     static void set_win_proc(Window win, win_proc_t proc);
+diff --git a/client/configure.ac.shared b/client/configure.ac.shared
+index eca9943..8c4c876 100644
+--- a/client/configure.ac.shared
++++ b/client/configure.ac.shared
+@@ -71,6 +71,16 @@ AM_CONDITIONAL(OS_UNIX, test "$os_win32" != "yes")
+ AM_CONDITIONAL(OS_LINUX, test "$os_linux" = "yes")
+
+ dnl =========================================================================
++dnl Optional features
++
++have_opengl=no
++AC_ARG_ENABLE(opengl,
++[  --enable-opengl         Enable opengl requirement / support (not recommended)],
++[  have_opengl=yes])
++AM_CONDITIONAL(SUPPORT_GL, test "x$have_opengl" = "xyes")
++
++
++dnl =========================================================================
+ dnl Check Dependencies
+
+ SPICE_REQUIRES=""
+@@ -139,19 +149,19 @@ SPICE_REQUIRES+=" openssl"
+ # AC_SUBST(GL_LIBS)
+ # SPICE_REQUIRES+=" gl glu"
+
+-have_gl=yes
+-AC_CHECK_LIB(GL, glBlendFunc, GL_LIBS="$GL_LIBS -lGL", have_gl=no)
+-AC_CHECK_LIB(GLU, gluSphere, GL_LIBS="$GL_LIBS -lGLU", have_gl=no)
+
+-if test "x$have_gl" = "xno"; then
+-   AC_MSG_ERROR([GL libraries not available])
++if test "x$have_opengl" = "xyes"; then
++   AC_CHECK_LIB(GL, glBlendFunc, GL_LIBS="$GL_LIBS -lGL", have_opengl=no)
++   AC_CHECK_LIB(GLU, gluSphere, GL_LIBS="$GL_LIBS -lGLU", have_opengl=no)
++
++   if test "x$have_opengl" = "xno"; then
++      AC_MSG_ERROR([GL libraries not available])
++   fi
+ fi
+
+ AC_SUBST(GL_LIBS)
+ SPICE_NONPKGCONFIG_LIBS+=" $GL_LIBS"
+
+-
+-
+ dnl =========================================================================
+ dnl configure arguments
+
+-- 
+1.7.0.1
+

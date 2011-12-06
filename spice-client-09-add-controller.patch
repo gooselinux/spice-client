@@ -1,0 +1,1223 @@
+From c650ff38ba2d1e75109813e58bb95c972ed20243 Mon Sep 17 00:00:00 2001
+From: Arnon Gilboa <agilboa@redhat.com>
+Date: Tue, 23 Mar 2010 17:44:14 +0200
+Subject: [PATCH 2/4] spice: client: add controller #558247
+
+Spice client controller enables external control (e.g., by XPI or ActiveX) of
+the client functionality.
+
+The controller protocol enables setting parameters (host, port, sport, pwd,
+secure channels, disabled channels, title, menus, hotkeys etc.), connecting
+the server, showing and hiding the client etc.
+
+The controller is rewritten from scratch, based on the cross-platform named pipe
+---
+ client/Makefile.am         |    3 +
+ client/application.cpp     |  152 +++++++++++++---
+ client/application.h       |   20 ++-
+ client/cmd_line_parser.cpp |    4 +
+ client/controller.cpp      |  425 ++++++++++++++++++++++++++++++++++++++++++++
+ client/controller.h        |  111 ++++++++++++
+ client/controller_prot.h   |  111 ++++++++++++
+ client/menu.cpp            |   18 ++-
+ client/menu.h              |    5 +-
+ client/red_client.cpp      |    3 +-
+ client/red_client.h        |    4 +-
+ client/x11/Makefile.am     |    3 +
+ client/x11/red_window.cpp  |    2 +-
+ 13 files changed, 831 insertions(+), 30 deletions(-)
+ create mode 100644 client/controller.cpp
+ create mode 100644 client/controller.h
+ create mode 100644 client/controller_prot.h
+
+diff --git a/client/Makefile.am b/client/Makefile.am
+index 09448c5..5a916e8 100644
+--- a/client/Makefile.am
++++ b/client/Makefile.am
+@@ -18,6 +18,9 @@ RED_COMMON_SRCS =	 		\
+ 	cmd_line_parser.cpp		\
+ 	cmd_line_parser.h		\
+ 	common.h			\
++	controller.cpp			\
++	controller.h			\
++	controller_prot.h		\
+ 	cursor_channel.cpp		\
+ 	cursor_channel.h		\
+ 	cursor.cpp			\
+diff --git a/client/application.cpp b/client/application.cpp
+index c7f1900..52b0be6 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -290,15 +290,16 @@ enum AppCommands {
+     APP_CMD_INVALID,
+     APP_CMD_SEND_CTL_ALT_DEL,
+     APP_CMD_TOGGLE_FULL_SCREEN,
+-    APP_CMD_RELEASE_CAPTURE,
+     APP_CMD_SEND_TOGGLE_KEYS,
+     APP_CMD_SEND_RELEASE_KEYS,
+     APP_CMD_SEND_CTL_ALT_END,
++    APP_CMD_RELEASE_CAPTURE,
+ #ifdef RED_DEBUG
+     APP_CMD_CONNECT,
+     APP_CMD_DISCONNECT,
+ #endif
+     APP_CMD_FOREIGN_MENU_MASK = 0x01000000,
++    APP_CMD_CONTROLLER_MENU_MASK = 0x02000000,
+ };
+
+ #define MENU_ID_MASK    0x000000ff
+@@ -323,6 +324,7 @@ Application::Application()
+     , _splash_mode (true)
+     , _sys_key_intercept_mode (false)
+     , _during_host_switch(false)
++    , _enable_controller (false)
+ {
+     DBG(0, "");
+     Platform::set_process_loop(*this);
+@@ -462,6 +464,10 @@ int Application::run()
+ void Application::on_start_running()
+ {
+     _foreign_menu.reset(new ForeignMenu(this));
++    if (_enable_controller) {
++        _controller.reset(new Controller(this));
++        return;
++    }
+     _client.connect();
+ }
+
+@@ -819,6 +825,9 @@ void Application::do_command(int command)
+         if ((command & APP_CMD_FOREIGN_MENU_MASK) == APP_CMD_FOREIGN_MENU_MASK) {
+             ASSERT(*_foreign_menu);
+             (*_foreign_menu)->on_command(conn_ref, command & MENU_ID_MASK);
++        } else if ((command & APP_CMD_CONTROLLER_MENU_MASK) == APP_CMD_CONTROLLER_MENU_MASK) {
++            ASSERT(*_controller);
++            (*_controller)->on_command(conn_ref, command & MENU_ID_MASK);
+         }
+     }
+ }
+@@ -852,6 +861,75 @@ void Application::update_menu()
+     }
+ }
+
++void Application::add_controller(int32_t opaque_conn_ref)
++{
++    _pipe_connections[opaque_conn_ref & MENU_CONN_MASK] = opaque_conn_ref;
++}
++
++void Application::delete_controller(int32_t opaque_conn_ref)
++{
++    _pipe_connections.erase(opaque_conn_ref & MENU_CONN_MASK);
++    delete_menu();
++}
++
++bool Application::connect(const std::string& host, int port, int sport, const std::string& password)
++{
++    _client.set_target(host, port, sport);
++    _client.set_password(password);
++    if (!set_channels_security(port, sport)) {
++        return false;
++    }
++    register_channels();
++    connect();
++    return true;
++}
++
++void Application::show_me(bool full_screen, bool auto_display_res)
++{
++    if (auto_display_res) {
++        Monitor* mon = find_monitor(0);
++        ASSERT(mon);
++        Point size = mon->get_size();
++        _main_screen->set_mode(size.x, size.y, 32);
++    }
++    if (full_screen) {
++        enter_full_screen();
++    } else {
++        _main_screen->show(true, NULL);
++    }
++}
++void Application::hide_me()
++{
++    if (_full_screen) {
++        exit_full_screen();
++    }
++    hide();
++}
++
++void Application::set_hotkeys(const std::string& hotkeys)
++{
++    std::auto_ptr<HotKeysParser> parser(new HotKeysParser(hotkeys, _commands_map));
++    _hot_keys = parser->get();
++}
++
++int Application::get_controller_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id)
++{
++    return APP_CMD_CONTROLLER_MENU_MASK | ((opaque_conn_ref & MENU_CONN_MASK) << MENU_CONN_SHIFT) |
++           (msg_id & MENU_ID_MASK);
++}
++
++void Application::set_menu(Menu* menu)
++{
++    _app_menu.reset(menu->ref());
++    update_menu();
++}
++
++void Application::delete_menu()
++{
++    init_menu();
++    update_menu();
++}
++
+ #ifdef REDKEY_DEBUG
+
+ static void show_red_key(RedKey key)
+@@ -1454,7 +1532,7 @@ uint32_t Application::get_mouse_mode()
+     return _client.get_mouse_mode();
+ }
+
+-void Application::set_title(std::wstring& title)
++void Application::set_title(const std::wstring& title)
+ {
+     _title = title;
+
+@@ -1737,7 +1815,7 @@ void Application::on_cmd_line_invalid_arg(const char* arg0, const char* what, co
+
+ bool Application::process_cmd_line(int argc, char** argv)
+ {
+-    std::string host;
++    std::string host = "";
+     int sport = -1;
+     int port = -1;
+     bool auto_display_res = false;
+@@ -1758,12 +1836,12 @@ bool Application::process_cmd_line(int argc, char** argv)
+         SPICE_OPT_ENABLE_CHANNELS,
+         SPICE_OPT_DISABLE_CHANNELS,
+         SPICE_OPT_CANVAS_TYPE,
++        SPICE_OPT_CONTROLLER,
+     };
+
+     CmdLineParser parser("Spice client", false);
+
+     parser.add(SPICE_OPT_HOST, "host", "spice server address", "host", true, 'h');
+-    parser.set_reqired(SPICE_OPT_HOST);
+     parser.add(SPICE_OPT_PORT, "port", "spice server port", "port", true, 'p');
+     parser.add(SPICE_OPT_SPORT, "secure-port", "spice server secure port", "port", true, 's');
+     parser.add(SPICE_OPT_SECURE_CHANNELS, "secure-channels",
+@@ -1795,6 +1873,8 @@ bool Application::process_cmd_line(int argc, char** argv)
+     parser.add(SPICE_OPT_CANVAS_TYPE, "canvas-type", "set rendering canvas", "canvas_type", true);
+     parser.set_multi(SPICE_OPT_CANVAS_TYPE, ',');
+
++    parser.add(SPICE_OPT_CONTROLLER, "controller", "enable external controller");
++
+     _peer_con_opt[RED_CHANNEL_MAIN] = RedPeer::ConnectionOptions::CON_OP_INVALID;
+     _peer_con_opt[RED_CHANNEL_DISPLAY] = RedPeer::ConnectionOptions::CON_OP_INVALID;
+     _peer_con_opt[RED_CHANNEL_INPUTS] = RedPeer::ConnectionOptions::CON_OP_INVALID;
+@@ -1878,6 +1958,14 @@ bool Application::process_cmd_line(int argc, char** argv)
+                 return false;
+             }
+             break;
++        case SPICE_OPT_CONTROLLER:
++            if (argc > 2) {
++                std::cout << "controller cannot be combined with other options\n";
++                _exit_code = SPICEC_ERROR_CODE_INVALID_ARG;
++                return false;
++            }
++            _enable_controller = true;
++            return true;
+         case CmdLineParser::OPTION_HELP:
+             parser.show_help();
+             return false;
+@@ -1889,13 +1977,43 @@ bool Application::process_cmd_line(int argc, char** argv)
+         }
+     }
+
++    if (host.empty()) {
++        std::cout << "missing --host\n";
++        return false;
++    }
++
+     if (parser.is_set(SPICE_OPT_SECURE_CHANNELS) && !parser.is_set(SPICE_OPT_SPORT)) {
+         Platform::term_printf("%s: missing --secure-port\n", argv[0]);
+         _exit_code = SPICEC_ERROR_CODE_CMD_LINE_ERROR;
+         return false;
+     }
+
++    if (!set_channels_security(port, sport)) {
++        Platform::term_printf("%s: missing --port or --sport\n", argv[0]);
++        return false;
++    }
++    register_channels();
++
++    _client.init(host.c_str(), port, sport, password.c_str(), auto_display_res);
++    if (auto_display_res) {
++        Monitor* mon = find_monitor(0);
++        ASSERT(mon);
++        Point size = mon->get_size();
++        _main_screen->set_mode(size.x, size.y, 32);
++    }
++
++    if (full_screen) {
++        enter_full_screen();
++    } else {
++        _main_screen->show(true, NULL);
++    }
++    return true;
++}
++
++bool Application::set_channels_security(int port, int sport)
++{
+     PeerConnectionOptMap::iterator iter = _peer_con_opt.begin();
++
+     for (; iter != _peer_con_opt.end(); iter++) {
+         if ((*iter).second == RedPeer::ConnectionOptions::CON_OP_SECURE) {
+             continue;
+@@ -1905,26 +2023,29 @@ bool Application::process_cmd_line(int argc, char** argv)
+             continue;
+         }
+
+-        if (parser.is_set(SPICE_OPT_PORT) && parser.is_set(SPICE_OPT_SPORT)) {
++        if (port != -1 && sport != -1) {
+             (*iter).second = RedPeer::ConnectionOptions::CON_OP_BOTH;
+             continue;
+         }
+
+-        if (parser.is_set(SPICE_OPT_PORT)) {
++        if (port != -1) {
+             (*iter).second = RedPeer::ConnectionOptions::CON_OP_UNSECURE;
+             continue;
+         }
+
+-        if (parser.is_set(SPICE_OPT_SPORT)) {
++        if (sport != -1) {
+             (*iter).second = RedPeer::ConnectionOptions::CON_OP_SECURE;
+             continue;
+         }
+
+-        Platform::term_printf("%s: missing --port or --sport\n", argv[0]);
+         _exit_code = SPICEC_ERROR_CODE_CMD_LINE_ERROR;
+         return false;
+     }
++    return true;
++}
+
++void Application::register_channels()
++{
+     if (_enabled_channels[RED_CHANNEL_DISPLAY]) {
+         _client.register_channel_factory(DisplayChannel::Factory());
+     }
+@@ -1944,21 +2065,6 @@ bool Application::process_cmd_line(int argc, char** argv)
+     if (_enabled_channels[RED_CHANNEL_RECORD]) {
+         _client.register_channel_factory(RecordChannel::Factory());
+     }
+-
+-    _client.init(host.c_str(), port, sport, password.c_str(), auto_display_res);
+-    if (auto_display_res) {
+-        Monitor* mon = find_monitor(0);
+-        ASSERT(mon);
+-        Point size = mon->get_size();
+-        _main_screen->set_mode(size.x, size.y, 32);
+-    }
+-
+-    if (full_screen) {
+-        enter_full_screen();
+-    } else {
+-        _main_screen->show(true, NULL);
+-    }
+-    return true;
+ }
+
+ void Application::init_logger()
+diff --git a/client/application.h b/client/application.h
+index 67ca6f6..62a9d12 100644
+--- a/client/application.h
++++ b/client/application.h
+@@ -27,6 +27,7 @@
+ #include "hot_keys.h"
+ #include "process_loop.h"
+ #include "foreign_menu.h"
++#include "controller.h"
+
+ class RedScreen;
+ class Application;
+@@ -130,7 +131,8 @@ public:
+ class Application : public ProcessLoop,
+                     public Platform::EventListener,
+                     public Platform::DisplayModeListner,
+-                    public ForeignMenuInterface {
++                    public ForeignMenuInterface,
++                    public ControllerInterface {
+ public:
+     Application();
+     virtual ~Application();
+@@ -168,7 +170,7 @@ public:
+     void minimize();
+     void show_splash(int screen_id);
+     void hide_splash(int screen_id);
+-    void set_title(std::wstring& title);
++    void set_title(const std::wstring& title);
+     void hide();
+     void show();
+     void external_show();
+@@ -189,10 +191,21 @@ public:
+     int get_foreign_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id);
+     void update_menu();
+
++    void add_controller(int32_t opaque_conn_ref);
++    void delete_controller(int32_t opaque_conn_ref);
++    bool connect(const std::string& host, int port, int sport, const std::string& password);
++    void show_me(bool full_screen, bool auto_display_res);
++    void hide_me();
++    void set_hotkeys(const std::string& hotkeys);
++    int get_controller_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id);
++    void set_menu(Menu* menu);
++    void delete_menu();
++
+     static int main(int argc, char** argv, const char* version_str);
+
+ private:
+     bool set_channels_security(CmdLineParser& parser, bool on, char *val, const char* arg0);
++    bool set_channels_security(int port, int sport);
+     bool set_connection_ciphers(const char* ciphers, const char* arg0);
+     bool set_ca_file(const char* ca_file, const char* arg0);
+     bool set_host_cert_subject(const char* subject, const char* arg0);
+@@ -200,6 +213,7 @@ private:
+     bool set_canvas_option(CmdLineParser& parser, char *val, const char* arg0);
+     void on_cmd_line_invalid_arg(const char* arg0, const char* what, const char* val);
+     bool process_cmd_line(int argc, char** argv);
++    void register_channels();
+     void abort();
+     void init_scan_code(int index);
+     void init_korean_scan_code(int index);
+@@ -282,6 +296,8 @@ private:
+     bool _during_host_switch;
+     AutoRef<SwitchHostTimer> _switch_host_timer;
+     AutoRef<ForeignMenu> _foreign_menu;
++    bool _enable_controller;
++    AutoRef<Controller> _controller;
+     std::map<int32_t, int32_t> _pipe_connections;
+ };
+
+diff --git a/client/cmd_line_parser.cpp b/client/cmd_line_parser.cpp
+index caa4b03..6e1e498 100644
+--- a/client/cmd_line_parser.cpp
++++ b/client/cmd_line_parser.cpp
+@@ -53,6 +53,10 @@ CmdLineParser::CmdLineParser(std::string description, bool allow_positional_args
+     , _positional_args (allow_positional_args)
+     , _done (false)
+ {
++    optind = 1;
++    opterr = 1;
++    optopt = 0;
++    optarg = 0;
+ }
+
+ CmdLineParser::~CmdLineParser()
+diff --git a/client/controller.cpp b/client/controller.cpp
+new file mode 100644
+index 0000000..13235a2
+--- /dev/null
++++ b/client/controller.cpp
+@@ -0,0 +1,427 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "common.h"
++#include "controller.h"
++#include "controller_prot.h"
++#include "cmd_line_parser.h"
++#include "menu.h"
++#include "utils.h"
++#include "debug.h"
++#include "platform.h"
++
++#define PIPE_NAME_MAX_LEN 50
++
++#ifdef WIN32
++#define PIPE_NAME "SpiceController-%lu"
++#elif defined(__i386__)
++#define PIPE_NAME "/tmp/SpiceController-%llu.uds"
++#else
++#define PIPE_NAME "/tmp/SpiceController-%lu.uds"
++#endif
++
++Controller::Controller(ControllerInterface *handler)
++    : _handler (handler)
++    , _exclusive (false)
++    , _refs (1)
++{
++    char pipe_name[PIPE_NAME_MAX_LEN];
++
++    ASSERT(_handler != NULL);
++    snprintf(pipe_name, PIPE_NAME_MAX_LEN, PIPE_NAME, Platform::get_process_id());
++    LOG_INFO("Creating a controller connection %s", pipe_name);
++    _pipe = NamedPipe::create(pipe_name, *this);
++    if (!_pipe) {
++        LOG_ERROR("Failed to create a controller connection");
++    }
++}
++
++Controller::~Controller()
++{
++    _handler = NULL;
++    std::map<NamedPipe::ConnectionRef, ControllerConnection*>::const_iterator conn;
++    for (conn = _connections.begin(); conn != _connections.end(); ++conn) {
++        delete conn->second;
++    }
++    if (_pipe) {
++        NamedPipe::destroy(_pipe);
++    }
++}
++
++NamedPipe::ConnectionInterface& Controller::create()
++{
++    ControllerConnection *conn = new ControllerConnection(_handler, *this);
++
++    if (conn == NULL) {
++        throw Exception("Error allocating a new controller connection");
++    }
++    return *conn;
++}
++
++bool Controller::set_exclusive(bool exclusive)
++{
++    if (_exclusive) {
++        LOG_ERROR("Cannot init controller, an exclusive controller already connected");
++        return false;
++    }
++    if (exclusive && _connections.size() > 1) {
++        LOG_ERROR("Cannot init exclusive controller, other controllers already connected");
++        return false;
++    }
++    _exclusive = exclusive;
++    return true;
++}
++
++void Controller::add_connection(NamedPipe::ConnectionRef conn_ref, ControllerConnection *conn)
++{
++    _connections[conn_ref] = conn;
++    conn->on_data();
++}
++
++void Controller::remove_connection(NamedPipe::ConnectionRef conn_ref)
++{
++    ControllerConnection *conn = _connections[conn_ref];
++    _connections.erase(conn_ref);
++    _exclusive = false;
++    delete conn;
++}
++
++void Controller::on_command(NamedPipe::ConnectionRef conn_ref, int32_t id)
++{
++    ControllerConnection *conn = _connections[conn_ref];
++    ControllerValue msg;
++
++    ASSERT(conn);
++    msg.base.id = CONTROLLER_MENU_ITEM_CLICK;
++    msg.base.size = sizeof(msg);
++    msg.value = id;
++    conn->write_msg(&msg.base, msg.base.size);
++}
++
++ControllerConnection::ControllerConnection(ControllerInterface *handler, Controller& parent)
++    : _handler (handler)
++    , _parent (parent)
++    , _initialized (false)
++    , _write_pending (0)
++    , _write_pos (_write_buf)
++    , _read_pos (_read_buf)
++    , _port (-1)
++    , _sport (-1)
++    , _full_screen (false)
++    , _auto_display_res (false)
++{
++}
++
++ControllerConnection::~ControllerConnection()
++{
++    if (_opaque != NamedPipe::INVALID_CONNECTION) {
++        NamedPipe::destroy_connection(_opaque);
++    }
++    if (_parent.handler_attached()) {
++        _handler->delete_controller(_opaque);
++    }
++}
++
++void ControllerConnection::bind(NamedPipe::ConnectionRef conn_ref)
++{
++    _opaque = conn_ref;
++    _parent.add_connection(conn_ref, this);
++}
++
++void ControllerConnection::on_data()
++{
++    if (_write_pending) {
++        LOG_INFO("Resume pending write %d", _write_pending);
++        if (!write_msg(_write_pos, _write_pending)) {
++            return;
++        }
++    }
++    while (read_msgs());
++}
++
++bool ControllerConnection::read_msgs()
++{
++    uint8_t *pos = _read_buf;
++    size_t nread = _read_pos - _read_buf;
++    int32_t size;
++
++    ASSERT(_handler != NULL);
++    ASSERT(_opaque != NamedPipe::INVALID_CONNECTION);
++    size = NamedPipe::read(_opaque, (uint8_t*)_read_pos, sizeof(_read_buf) - nread);
++    if (size == 0) {
++        return false;
++    } else if (size < 0) {
++        LOG_ERROR("Error reading from named pipe %d", size);
++        _parent.remove_connection(_opaque);
++        return false;
++    }
++    nread += size;
++    while (nread > 0) {
++        if (!_initialized && nread >= sizeof(ControllerInitHeader)) {
++            ControllerInitHeader *init = (ControllerInitHeader *)pos;
++            if (init->magic != CONTROLLER_MAGIC || init->version != CONTROLLER_VERSION) {
++                LOG_ERROR("Bad controller init, magic=0x%x version=%u", init->magic,
++                          init->version);
++                _parent.remove_connection(_opaque);
++                return false;
++            }
++            if (nread < init->size) {
++                break;
++            }
++            if (!handle_init((ControllerInit*)init)) {
++                _parent.remove_connection(_opaque);
++                return false;
++            }
++            nread -= init->size;
++            pos += init->size;
++            _initialized = true;
++        }
++        if (!_initialized || nread < sizeof(ControllerMsg)) {
++            break;
++        }
++        ControllerMsg *hdr = (ControllerMsg *)pos;
++        if (hdr->size < sizeof(ControllerMsg)) {
++            LOG_ERROR("Bad controller message, size=%u", hdr->size);
++            _parent.remove_connection(_opaque);
++            return false;
++        }
++        if (nread < hdr->size) {
++            break;
++        }
++        handle_message(hdr);
++        nread -= hdr->size;
++        pos += hdr->size;
++    }
++    if (nread > 0 && pos != _read_buf) {
++        memcpy(_read_buf, pos, nread);
++    }
++    _read_pos = _read_buf + nread;
++    return true;
++}
++
++bool ControllerConnection::write_msg(const void *buf, int len)
++{
++    uint8_t *pos;
++    int32_t written = 0;
++
++    ASSERT(_opaque != NamedPipe::INVALID_CONNECTION);
++    if (_write_pending && buf != _write_pos) {
++        if (_write_pending + len > sizeof(_write_buf)) {
++            DBG(0, "Dropping msg due to pending write %d", _write_pending);
++            return false;
++        }
++        memcpy(_write_buf + _write_pending, buf, len);
++        _write_pending += len;
++        return true;
++    }
++    pos = (uint8_t*)buf;
++    while (len && (written = NamedPipe::write(_opaque, pos, len)) > 0) {
++        pos += written;
++        len -= written;
++    }
++    if (len && written == 0) {
++        if (_write_pending) {
++            _write_pos = pos;
++        } else {
++            _write_pos = _write_buf;
++            memcpy(_write_buf, pos, len);
++        }
++        _write_pending = len;
++    } else if (written < 0) {
++        LOG_ERROR("Error writing to named pipe %d", written);
++        _parent.remove_connection(_opaque);
++        return false;
++    } else {
++        _write_pending = 0;
++    }
++    return true;
++}
++
++bool ControllerConnection::handle_init(ControllerInit *init)
++{
++    if (init->credentials != 0) {
++        LOG_ERROR("Controller menu has wrong credentials 0x%x", init->credentials);
++        return false;
++    }
++    if (!_parent.set_exclusive(init->flags & CONTROLLER_FLAG_EXCLUSIVE)) {
++        return false;
++    }
++    _handler->add_controller(_opaque);
++    return true;
++}
++
++bool ControllerConnection::handle_message(ControllerMsg *hdr)
++{
++    uint32_t value = ((ControllerValue*)hdr)->value;
++    char *data = (char*)((ControllerData*)hdr)->data;
++
++    switch (hdr->id) {
++    case CONTROLLER_HOST:
++        _host.assign(data);
++        break;
++    case CONTROLLER_PORT:
++        _port = value;
++        break;
++    case CONTROLLER_SPORT:
++        _sport = value;
++        break;
++    case CONTROLLER_PASSWORD:
++        _password.assign(data);
++        break;
++    case CONTROLLER_SECURE_CHANNELS:
++    case CONTROLLER_DISABLE_CHANNELS:
++        return set_multi_val(hdr->id, data);
++    case CONTROLLER_FULL_SCREEN:
++        _full_screen = !!(value & CONTROLLER_SET_FULL_SCREEN);
++        _auto_display_res = !!(value & CONTROLLER_AUTO_DISPLAY_RES);
++        break;
++    case CONTROLLER_SET_TITLE: {
++        std::wstring str;
++#ifdef WIN32
++        wstring_printf(str, L"%s", data);
++#else
++        wstring_printf(str, L"%S", data);
++#endif
++        _handler->set_title(str);
++        break;
++    }
++    case CONTROLLER_HOTKEYS:
++        _handler->set_hotkeys(data);
++        break;
++    case CONTROLLER_CONNECT:
++        _handler->connect(_host, _port, _sport, _password);
++        break;
++    case CONTROLLER_SHOW:
++        _handler->show_me(_full_screen, _auto_display_res);
++        break;
++    case CONTROLLER_HIDE:
++        _handler->hide_me();
++        break;
++    case CONTROLLER_CREATE_MENU:
++        return create_menu((wchar_t*)data);
++    case CONTROLLER_DELETE_MENU:
++        _handler->delete_menu();
++        break;
++    case CONTROLLER_SEND_CAD:
++    default:
++        LOG_ERROR("Ignoring an unknown controller message %u", hdr->id);
++        return false;
++    }
++    return true;
++}
++
++#ifdef WIN32
++#define next_tok(str, delim, state) wcstok(str, delim)
++#else
++#define next_tok(str, delim, state) wcstok(str, delim, state)
++#endif
++
++bool ControllerConnection::create_menu(wchar_t* resource)
++{
++    bool ret = true;
++    wchar_t* item_state = 0;
++    wchar_t* item_dup;
++    wchar_t* param;
++    std::string text;
++    int parent_id;
++    int flags;
++    int state;
++    int id;
++
++    AutoRef<Menu> app_menu(_handler->get_app_menu());
++    AutoRef<Menu> menu(new Menu((*app_menu)->get_target(), ""));
++    wchar_t* item = next_tok(resource, CONTROLLER_MENU_ITEM_DELIMITER, &item_state);
++    while (item != NULL) {
++        item_dup = wcsdup(item);
++        ret = ret && (param = next_tok(item_dup, CONTROLLER_MENU_PARAM_DELIMITER, &item_state)) &&
++              swscanf(param, L"%d", &parent_id);
++        ret = ret && (param = next_tok(NULL, CONTROLLER_MENU_PARAM_DELIMITER, &item_state)) &&
++              swscanf(param, L"%d", &id);
++        ret = ret && (param = next_tok(NULL, CONTROLLER_MENU_PARAM_DELIMITER, &item_state));
++        if (ret) {
++            string_printf(text, "%S", param);
++        }
++        ret = ret && (param = next_tok(NULL, CONTROLLER_MENU_PARAM_DELIMITER, &item_state)) &&
++              swscanf(param, L"%d", &flags);
++        free(item_dup);
++
++        if (!ret) {
++            DBG(0, "item parsing failed %S", item);
++            break;
++        }
++        DBG(0, "parent_id=%d, id=%d, text=%s, flags=%d", parent_id, id, text.c_str(), flags);
++
++        AutoRef<Menu> sub_menu((*menu)->find_sub(parent_id));
++        if (!(ret = !!*sub_menu)) {
++            DBG(0, "submenu not found %S", item);
++            break;
++        }
++
++        if (flags & CONTROLLER_MENU_FLAGS_SEPARATOR) {
++            (*sub_menu)->add_separator();
++        } else if (flags & CONTROLLER_MENU_FLAGS_POPUP) {
++            AutoRef<Menu> sub(new Menu((*app_menu)->get_target(), text, id));
++            (*sub_menu)->add_sub(sub.release());
++        } else {
++            state = 0;
++            if (flags & (CONTROLLER_MENU_FLAGS_DISABLED | CONTROLLER_MENU_FLAGS_GRAYED)) {
++                state |= Menu::MENU_ITEM_STATE_DIM;
++            }
++            if (flags & CONTROLLER_MENU_FLAGS_CHECKED) {
++                state |= Menu::MENU_ITEM_STATE_CHECKED;
++            }
++            if (id >= SPICE_MENU_INTERNAL_ID_BASE) {
++                id = ((id - SPICE_MENU_INTERNAL_ID_BASE) >> SPICE_MENU_INTERNAL_ID_SHIFT) + 1;
++            } else {
++                id = _handler->get_controller_menu_item_id(_opaque, id);
++            }
++            (*sub_menu)->add_command(text, id, state);
++        }
++        item = next_tok(item + wcslen(item) + 1, CONTROLLER_MENU_ITEM_DELIMITER, &item_state);
++    }
++    if (ret) {
++        _handler->set_menu(*menu);
++    }
++    return ret;
++}
++
++bool ControllerConnection::set_multi_val(uint32_t op, char* multi_val)
++{
++    CmdLineParser parser("", false);
++    int id = CmdLineParser::OPTION_FIRST_AVILABLE;
++    char* argv[] = {NULL, (char*)"--set", multi_val};
++    char* val;
++
++    parser.add(id, "set", "none", "none", true);
++    parser.set_multi(id, ',');
++    parser.begin(3, argv);
++    if (parser.get_option(&val) != id) {
++        return false;
++    }
++    switch (op) {
++    case CONTROLLER_SECURE_CHANNELS:
++        _handler->set_channels_security(parser, true, val, "Controller");
++        break;
++    case CONTROLLER_DISABLE_CHANNELS:
++        _handler->set_enable_channels(parser, false, val, "Controller");
++        break;
++    default:
++        DBG(0, "unsupported op %u", op);
++        return false;
++    }
++    return true;
++}
+diff --git a/client/controller.h b/client/controller.h
+new file mode 100644
+index 0000000..cd1ead9
+--- /dev/null
++++ b/client/controller.h
+@@ -0,0 +1,111 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#ifndef _H_CONTROLLER_MENU
++#define _H_CONTROLLER_MENU
++
++#include "named_pipe.h"
++
++class ControllerConnection;
++struct ControllerInit;
++struct ControllerMsg;
++class CmdLineParser;
++class Menu;
++
++class ControllerInterface {
++public:
++    virtual ~ControllerInterface() {}
++
++    virtual void add_controller(int32_t opaque_conn_ref) = 0;
++    virtual void delete_controller(int32_t opaque_conn_ref) = 0;
++    virtual bool connect(const std::string& host, int port, int sport,
++                         const std::string& password) = 0;
++    virtual void set_title(const std::wstring& title) = 0;
++    virtual void show_me(bool full_screen, bool auto_display_res) = 0;
++    virtual void hide_me() = 0;
++    virtual bool set_channels_security(CmdLineParser& parser, bool on, char *val,
++                                       const char* arg0) = 0;
++    virtual bool set_enable_channels(CmdLineParser& parser, bool enable, char *val,
++                                     const char* arg0) = 0;
++    virtual void set_hotkeys(const std::string& hotkeys) = 0;
++    virtual int get_controller_menu_item_id(int32_t opaque_conn_ref, uint32_t id) = 0;
++    virtual Menu* get_app_menu() = 0;
++    virtual void set_menu(Menu* menu) = 0;
++    virtual void delete_menu() = 0;
++};
++
++class Controller : public NamedPipe::ListenerInterface {
++public:
++    Controller(ControllerInterface *handler);
++    virtual ~Controller();
++
++    bool handler_attached() { return !!_handler;}
++    Controller* ref() { _refs++; return this;}
++    void unref() { if (!--_refs) delete this;}
++
++    virtual NamedPipe::ConnectionInterface &create();
++    bool set_exclusive(bool exclusive);
++    void add_connection(NamedPipe::ConnectionRef conn_ref, ControllerConnection *conn);
++    void remove_connection(NamedPipe::ConnectionRef conn_ref);
++    void on_command(NamedPipe::ConnectionRef conn_ref, int32_t id);
++
++private:
++    ControllerInterface *_handler;
++    std::map<NamedPipe::ConnectionRef, ControllerConnection*> _connections;
++    NamedPipe::ListenerRef _pipe;
++    bool _exclusive;
++    int _refs;
++};
++
++#define CONTROLLER_BUF_SIZE 4096
++
++class ControllerConnection : public NamedPipe::ConnectionInterface {
++public:
++    ControllerConnection(ControllerInterface *handler, Controller& parent);
++    virtual ~ControllerConnection();
++
++    virtual void bind(NamedPipe::ConnectionRef conn_ref);
++    virtual void on_data();
++    bool write_msg(const void *buf, int len);
++
++private:
++    bool read_msgs();
++    bool handle_init(ControllerInit *init);
++    bool handle_message(ControllerMsg *hdr);
++    bool create_menu(wchar_t* resource);
++    bool set_multi_val(uint32_t op, char* multi_val);
++
++private:
++    ControllerInterface *_handler;
++    Controller& _parent;
++    bool _initialized;
++
++    int _write_pending;
++    uint8_t *_write_pos;
++    uint8_t *_read_pos;
++    uint8_t _write_buf[CONTROLLER_BUF_SIZE];
++    uint8_t _read_buf[CONTROLLER_BUF_SIZE];
++
++    std::string _host;
++    std::string _password;
++    int _port;
++    int _sport;
++    bool _full_screen;
++    bool _auto_display_res;
++};
++
++#endif
+diff --git a/client/controller_prot.h b/client/controller_prot.h
+new file mode 100644
+index 0000000..bd62577
+--- /dev/null
++++ b/client/controller_prot.h
+@@ -0,0 +1,111 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#ifndef _H_CONTROLLER_PROT
++#define _H_CONTROLLER_PROT
++
++#define CONTROLLER_MAGIC      (*(uint32_t*)"CTRL")
++#define CONTROLLER_VERSION    1
++
++#ifdef __GNUC__
++#define ATTR_PACKED __attribute__ ((__packed__))
++#else
++#define ATTR_PACKED __declspec(align(1))
++#endif
++
++typedef struct ATTR_PACKED ControllerInitHeader {
++    uint32_t magic;
++    uint32_t version;
++    uint32_t size;
++} ControllerInitHeader;
++
++typedef struct ATTR_PACKED ControllerInit {
++    ControllerInitHeader base;
++    uint64_t credentials;
++    uint32_t flags;
++} ControllerInit;
++
++enum {
++    CONTROLLER_FLAG_EXCLUSIVE = 1 << 0,
++};
++
++typedef struct ATTR_PACKED ControllerMsg {
++    uint32_t id;
++    uint32_t size;
++} ControllerMsg;
++
++enum {
++    //extrenal app -> spice client
++    CONTROLLER_HOST = 1,
++    CONTROLLER_PORT,
++    CONTROLLER_SPORT,
++    CONTROLLER_PASSWORD,
++
++    CONTROLLER_SECURE_CHANNELS,
++    CONTROLLER_DISABLE_CHANNELS,
++
++    CONTROLLER_FULL_SCREEN,
++    CONTROLLER_SET_TITLE,
++
++    CONTROLLER_CREATE_MENU,
++    CONTROLLER_DELETE_MENU,
++
++    CONTROLLER_HOTKEYS,
++    CONTROLLER_SEND_CAD,
++
++    CONTROLLER_CONNECT,
++    CONTROLLER_SHOW,
++    CONTROLLER_HIDE,
++
++    //spice client -> extrenal app
++    CONTROLLER_MENU_ITEM_CLICK = 1001,
++};
++
++#define CONTROLLER_TRUE (1 << 0)
++
++enum {
++    CONTROLLER_SET_FULL_SCREEN  = CONTROLLER_TRUE,
++    CONTROLLER_AUTO_DISPLAY_RES = 1 << 1,
++};
++
++typedef struct ATTR_PACKED ControllerValue {
++    ControllerMsg base;
++    uint32_t value;
++} ControllerValue;
++
++typedef struct ATTR_PACKED ControllerData {
++    ControllerMsg base;
++    uint8_t data[0];
++} ControllerData;
++
++#define CONTROLLER_MENU_ITEM_DELIMITER L"\n"
++#define CONTROLLER_MENU_PARAM_DELIMITER L"\r"
++
++enum {
++    CONTROLLER_MENU_FLAGS_SEPARATOR    = 1 << 0,
++    CONTROLLER_MENU_FLAGS_DISABLED     = 1 << 1,
++    CONTROLLER_MENU_FLAGS_POPUP        = 1 << 2,
++    CONTROLLER_MENU_FLAGS_CHECKED      = 1 << 3,
++    CONTROLLER_MENU_FLAGS_GRAYED       = 1 << 4,
++};
++
++#define SPICE_MENU_INTERNAL_ID_BASE   0x1300
++#define SPICE_MENU_INTERNAL_ID_SHIFT  8
++
++#undef ATTR_PACKED
++
++#endif
+diff --git a/client/menu.cpp b/client/menu.cpp
+index d260f3a..96e42b0 100644
+--- a/client/menu.cpp
++++ b/client/menu.cpp
+@@ -20,10 +20,11 @@
+ #include "utils.h"
+ #include "debug.h"
+
+-Menu::Menu(CommandTarget& target, const std::string& name)
++Menu::Menu(CommandTarget& target, const std::string& name, int id)
+     : _refs (1)
+     , _target (target)
+     , _name (name)
++    , _id (id)
+ {
+ }
+
+@@ -115,6 +116,21 @@ Menu* Menu::sub_at(int pos)
+     return ((Menu*)_items[pos].obj)->ref();
+ }
+
++Menu* Menu::find_sub(int id)
++{
++    Menu* sub;
++
++    if (_id == id) {
++        return ref();
++    }
++    for (unsigned int i = 0; i < _items.size(); i++) {
++        if (_items[i].type == MENU_ITEM_TYPE_MENU && (sub = ((Menu*)_items[i].obj)->find_sub(id))) {
++            return sub;
++        }
++    }
++    return NULL;
++}
++
+ void Menu::clear()
+ {
+     for (unsigned int i = 0; i < _items.size(); i++) {
+diff --git a/client/menu.h b/client/menu.h
+index ee3c9ec..0b36316 100644
+--- a/client/menu.h
++++ b/client/menu.h
+@@ -26,7 +26,7 @@ public:
+
+ class Menu {
+ public:
+-    Menu(CommandTarget& target, const std::string& name);
++    Menu(CommandTarget& target, const std::string& name, int id = 0);
+
+     enum ItemType {
+         MENU_ITEM_TYPE_INVALID,
+@@ -46,6 +46,7 @@ public:
+     void set_name(const std::string& name) { _name = name;}
+     const std::string& get_name() { return _name;}
+     CommandTarget& get_target() { return _target;}
++    int get_id() { return _id;}
+
+     void add_command(const std::string& name, int cmd_id, int state = 0);
+     void add_separator();
+@@ -57,6 +58,7 @@ public:
+     ItemType item_type_at(int pos);
+     void command_at(int pos, std::string& name, int& cmd_id, int& state);
+     Menu* sub_at(int pos);
++    Menu* find_sub(int id);
+
+     void clear();
+
+@@ -94,6 +96,7 @@ private:
+     CommandTarget& _target;
+     std::string _name;
+     std::vector<MenuItem> _items;
++    int _id;
+ };
+
+ #endif
+diff --git a/client/red_client.cpp b/client/red_client.cpp
+index 9fa2b1a..64b518a 100644
+--- a/client/red_client.cpp
++++ b/client/red_client.cpp
+@@ -263,6 +263,7 @@ RedClient::RedClient(Application& application)
+     , _connection_id (0)
+     , _mouse_mode (RED_MOUSE_MODE_SERVER)
+     , _notify_disconnect (false)
++    , _auto_display_res (false)
+     , _aborting (false)
+     , _agent_connected (false)
+     , _agent_mon_config_sent (false)
+@@ -329,7 +330,7 @@ void RedClient::init(const char* host, int port, int sport, const char *password
+     }
+ }
+
+-void RedClient::set_target(const char* host, uint16_t port, uint16_t sport)
++void RedClient::set_target(const std::string& host, int port, int sport)
+ {
+     _port = port;
+     _sport = sport;
+diff --git a/client/red_client.h b/client/red_client.h
+index 2937996..407be0b 100644
+--- a/client/red_client.h
++++ b/client/red_client.h
+@@ -140,7 +140,9 @@ public:
+     void activate_interval_timer(Timer* timer, unsigned int millisec);
+     void deactivate_interval_timer(Timer* timer);
+
+-    void set_target(const char* host, uint16_t port, uint16_t sport);
++    void set_target(const std::string& host, int port, int sport);
++    void set_password(const std::string& password) { _password = password;}
++    void set_auto_display_res(bool auto_display_res) { _auto_display_res = auto_display_res;}
+     const char* get_password() { return _password.c_str();}
+     const char* get_host() { return _host.c_str();}
+     int get_port() { return _port;}
+diff --git a/client/x11/Makefile.am b/client/x11/Makefile.am
+index d48ef87..1ca2359 100644
+--- a/client/x11/Makefile.am
++++ b/client/x11/Makefile.am
+@@ -43,6 +43,9 @@ RED_COMMON_SRCS = 					\
+ 	$(CLIENT_DIR)/cmd_line_parser.cpp		\
+ 	$(CLIENT_DIR)/cmd_line_parser.h			\
+ 	$(CLIENT_DIR)/common.h				\
++	$(CLIENT_DIR)/controller.cpp			\
++	$(CLIENT_DIR)/controller.h			\
++	$(CLIENT_DIR)/controller_prot.h			\
+ 	$(CLIENT_DIR)/cursor_channel.cpp		\
+ 	$(CLIENT_DIR)/cursor_channel.h			\
+ 	$(CLIENT_DIR)/cursor.cpp			\
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index 7e25c60..6b4148b 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -1199,7 +1199,7 @@ void RedWindow::set_title(std::wstring& title)
+     int r;
+     if (_win) {
+         r = XwcTextListToTextProperty(x_display, &name, 1, XStringStyle, &text_prop);
+-        if (r >= 0) {
++        if (r == Success) {
+             XSetWMName(x_display, _win, &text_prop);
+             XFree(text_prop.value);
+         } else {
+-- 
+1.6.6.1
+

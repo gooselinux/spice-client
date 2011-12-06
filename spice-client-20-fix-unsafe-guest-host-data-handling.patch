@@ -1,0 +1,133 @@
+From fefe79a58df0a24c06c21783ddd5c09394e3ca12 Mon Sep 17 00:00:00 2001
+From: Izik Eidus <ieidus@redhat.com>
+Date: Sat, 13 Mar 2010 10:40:56 +0200
+Subject: [PATCH] spice server: fix unsafe guest/host data handling #568811
+
+Signed-off-by: Izik Eidus <ieidus@redhat.com>
+---
+ client/canvas.cpp           |    2 +-
+ client/canvas.h             |    2 +-
+ client/red_cairo_canvas.cpp |    4 ++--
+ client/red_cairo_canvas.h   |    2 +-
+ client/red_gdi_canvas.cpp   |    4 ++--
+ client/red_gdi_canvas.h     |    2 +-
+ client/red_gl_canvas.cpp    |    4 ++--
+ client/red_gl_canvas.h      |    2 +-
+ 8 files changed, 11 insertions(+), 11 deletions(-)
+
+diff --git a/client/canvas.cpp b/client/canvas.cpp
+index 310cdec..6ce2af2 100644
+--- a/client/canvas.cpp
++++ b/client/canvas.cpp
+@@ -107,7 +107,7 @@ void Canvas::begin_draw(RedDrawBase& base, int size, size_t min_size)
+ {
+     _base = (unsigned long)&base;
+     _max = _base + size;
+-    set_access_params(_base, _base, _max);
++    set_access_params(_base, _max);
+     access_test(&base, min_size);
+     localalize_ptr(&base.clip.data);
+ }
+diff --git a/client/canvas.h b/client/canvas.h
+index 55415e3..f1fd975 100644
+--- a/client/canvas.h
++++ b/client/canvas.h
+@@ -213,7 +213,7 @@ public:
+     virtual CanvasType get_pixmap_type() { return CANVAS_TYPE_INVALID; }
+
+ protected:
+-    virtual void set_access_params(ADDRESS delta, unsigned long base, unsigned long max) = 0;
++    virtual void set_access_params(unsigned long base, unsigned long max) = 0;
+     virtual void draw_fill(Rect *bbox, Clip *clip, Fill *fill) = 0;
+     virtual void draw_copy(Rect *bbox, Clip *clip, Copy *copy) = 0;
+     virtual void draw_opaque(Rect *bbox, Clip *clip, Opaque *opaque) = 0;
+diff --git a/client/red_cairo_canvas.cpp b/client/red_cairo_canvas.cpp
+index 02a48e4..d565e49 100644
+--- a/client/red_cairo_canvas.cpp
++++ b/client/red_cairo_canvas.cpp
+@@ -108,9 +108,9 @@ void CCanvas::set_mode(int width, int height, int depth, RedWindow *win)
+     }
+ }
+
+-void CCanvas::set_access_params(ADDRESS delta, unsigned long base, unsigned long max)
++void CCanvas::set_access_params(unsigned long base, unsigned long max)
+ {
+-    canvas_set_access_params(_canvas, delta, base, max);
++    canvas_set_access_params(_canvas, base, max);
+ }
+
+ void CCanvas::draw_fill(Rect *bbox, Clip *clip, Fill *fill)
+diff --git a/client/red_cairo_canvas.h b/client/red_cairo_canvas.h
+index a78627d..43ee78a 100644
+--- a/client/red_cairo_canvas.h
++++ b/client/red_cairo_canvas.h
+@@ -46,7 +46,7 @@ public:
+     virtual CanvasType get_pixmap_type();
+
+ protected:
+-    virtual void set_access_params(ADDRESS delta, unsigned long base, unsigned long max);
++    virtual void set_access_params(unsigned long base, unsigned long max);
+     virtual void draw_fill(Rect *bbox, Clip *clip, Fill *fill);
+     virtual void draw_copy(Rect *bbox, Clip *clip, Copy *copy);
+     virtual void draw_opaque(Rect *bbox, Clip *clip, Opaque *opaque);
+diff --git a/client/red_gdi_canvas.cpp b/client/red_gdi_canvas.cpp
+index 809468f..68acd45 100644
+--- a/client/red_gdi_canvas.cpp
++++ b/client/red_gdi_canvas.cpp
+@@ -91,9 +91,9 @@ void GDICanvas::set_mode(int width, int height, int depth)
+     }
+ }
+
+-void GDICanvas::set_access_params(ADDRESS delta, unsigned long base, unsigned long max)
++void GDICanvas::set_access_params(unsigned long base, unsigned long max)
+ {
+-    gdi_canvas_set_access_params(_canvas, delta, base, max);
++    gdi_canvas_set_access_params(_canvas, base, max);
+ }
+
+ void GDICanvas::draw_fill(Rect *bbox, Clip *clip, Fill *fill)
+diff --git a/client/red_gdi_canvas.h b/client/red_gdi_canvas.h
+index c62fed6..7fc981e 100644
+--- a/client/red_gdi_canvas.h
++++ b/client/red_gdi_canvas.h
+@@ -43,7 +43,7 @@ public:
+     virtual CanvasType get_pixmap_type();
+
+ protected:
+-    virtual void set_access_params(ADDRESS delta, unsigned long base, unsigned long max);
++    virtual void set_access_params(unsigned long base, unsigned long max);
+     virtual void draw_fill(Rect *bbox, Clip *clip, Fill *fill);
+     virtual void draw_copy(Rect *bbox, Clip *clip, Copy *copy);
+     virtual void draw_opaque(Rect *bbox, Clip *clip, Opaque *opaque);
+diff --git a/client/red_gl_canvas.cpp b/client/red_gl_canvas.cpp
+index 168734c..f08dd4d 100644
+--- a/client/red_gl_canvas.cpp
++++ b/client/red_gl_canvas.cpp
+@@ -100,9 +100,9 @@ void GCanvas::set_mode(int width, int height, int depth, RedWindow *win,
+     }
+ }
+
+-void GCanvas::set_access_params(ADDRESS delta, unsigned long base, unsigned long max)
++void GCanvas::set_access_params(unsigned long base, unsigned long max)
+ {
+-    gl_canvas_set_access_params(_canvas, delta, base, max);
++    gl_canvas_set_access_params(_canvas, base, max);
+ }
+
+ void GCanvas::draw_fill(Rect *bbox, Clip *clip, Fill *fill)
+diff --git a/client/red_gl_canvas.h b/client/red_gl_canvas.h
+index 4bf8542..7763cf2 100644
+--- a/client/red_gl_canvas.h
++++ b/client/red_gl_canvas.h
+@@ -42,7 +42,7 @@ public:
+     void put_image(const PixmapHeader& image, const Rect& dest,
+                    const QRegion* clip);
+
+-    void set_access_params(ADDRESS delta, unsigned long base, unsigned long max);
++    void set_access_params(unsigned long base, unsigned long max);
+     void draw_fill(Rect *bbox, Clip *clip, Fill *fill);
+     void draw_copy(Rect *bbox, Clip *clip, Copy *copy);
+     void draw_opaque(Rect *bbox, Clip *clip, Opaque *opaque);
+-- 
+1.7.2
+

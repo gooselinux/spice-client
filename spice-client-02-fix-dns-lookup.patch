@@ -1,0 +1,46 @@
+From 54c5236f347a19aa202876eebb1c1f29c4f21928 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 25 Feb 2010 14:52:35 +0100
+Subject: [PATCH 1/2] spice client: fix dns lookup #566444
+
+ignore lookup results which are not ipv4
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ client/red_peer.cpp |   12 +++++++++---
+ 1 files changed, 9 insertions(+), 3 deletions(-)
+
+diff --git a/client/red_peer.cpp b/client/red_peer.cpp
+index 069fdae..9db48e4 100644
+--- a/client/red_peer.cpp
++++ b/client/red_peer.cpp
+@@ -113,17 +113,23 @@ void RedPeer::cleanup()
+
+ uint32_t RedPeer::host_by_name(const char* host)
+ {
+-    struct addrinfo *result = NULL;
++    struct addrinfo *e, *result = NULL;
+     struct sockaddr_in *addr;
+     uint32_t return_value;
+     int rc;
+
+     rc = getaddrinfo(host, NULL, NULL, &result);
+-    if (rc != 0 || result == NULL) {
++    for (e = result; e != NULL; e = e->ai_next) {
++        if (e->ai_family == PF_INET)
++            break;
++    }
++    if (rc != 0 || e == NULL) {
++        if (result)
++            freeaddrinfo(result);
+         THROW_ERR(SPICEC_ERROR_CODE_GETHOSTBYNAME_FAILED, "cannot resolve host address %s", host);
+     }
+
+-    addr = (sockaddr_in *)result->ai_addr;
++    addr = (sockaddr_in *)e->ai_addr;
+     return_value = addr->sin_addr.s_addr;
+
+     freeaddrinfo(result);
+-- 
+1.6.6.1
+

@@ -1,0 +1,874 @@
+From 6bd29008a47831337a3f9000f6a7207a9f8c5f4f Mon Sep 17 00:00:00 2001
+From: Arnon Gilboa <agilboa@redhat.com>
+Date: Tue, 23 Mar 2010 17:44:13 +0200
+Subject: [PATCH 1/4] spice: client: add foreign menu #558248
+
+Spice foreign menu enables external control of the client menu.
+
+The foreignmenu protocol enables an external application to:
+add a submenu, set its title, clear it, add/modify/remove an item etc.
+
+Foreign menu is rewritten from scratch, based on the cross-platform named pipe
+---
+ client/Makefile.am            |    3 +
+ client/application.cpp        |   56 +++++++-
+ client/application.h          |   11 ++-
+ client/foreign_menu.cpp       |  332 +++++++++++++++++++++++++++++++++++++++++
+ client/foreign_menu.h         |   93 ++++++++++++
+ client/foreign_menu_prot.h    |  107 +++++++++++++
+ client/process_loop.cpp       |   11 +-
+ client/process_loop.h         |    7 +-
+ client/screen.cpp             |    9 +-
+ client/screen.h               |    1 +
+ client/x11/Makefile.am        |    3 +
+ 11 files changed, 623 insertions(+), 19 deletions(-)
+ create mode 100644 client/foreign_menu.cpp
+ create mode 100644 client/foreign_menu.h
+ create mode 100644 client/foreign_menu_prot.h
+
+diff --git a/client/Makefile.am b/client/Makefile.am
+index efe3952..09448c5 100644
+--- a/client/Makefile.am
++++ b/client/Makefile.am
+@@ -25,6 +25,9 @@ RED_COMMON_SRCS =	 		\
+ 	debug.h				\
+ 	display_channel.cpp		\
+ 	display_channel.h		\
++	foreign_menu.cpp		\
++	foreign_menu.h			\
++	foreign_menu_prot.h		\
+ 	red_gl_canvas.cpp		\
+ 	red_gl_canvas.h			\
+ 	gl_canvas.cpp			\
+diff --git a/client/application.cpp b/client/application.cpp
+index 094fa93..c7f1900 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -298,8 +298,13 @@ enum AppCommands {
+     APP_CMD_CONNECT,
+     APP_CMD_DISCONNECT,
+ #endif
++    APP_CMD_FOREIGN_MENU_MASK = 0x01000000,
+ };
+
++#define MENU_ID_MASK    0x000000ff
++#define MENU_CONN_MASK  0x0000ffff
++#define MENU_CONN_SHIFT 8
++
+ Application::Application()
+     : ProcessLoop (this)
+     , _client (*this)
+@@ -450,10 +455,14 @@ void Application::switch_host(const std::string& host, int port, int sport,
+
+ int Application::run()
+ {
+-       _client.connect();
+-       _exit_code = ProcessLoop::run();
+-       return _exit_code;
++    _exit_code = ProcessLoop::run();
++    return _exit_code;
++}
+
++void Application::on_start_running()
++{
++    _foreign_menu.reset(new ForeignMenu(this));
++    _client.connect();
+ }
+
+ RedScreen* Application::find_screen(int id)
+@@ -805,6 +814,41 @@ void Application::do_command(int command)
+         do_disconnect();
+         break;
+ #endif
++    default:
++        int32_t conn_ref = _pipe_connections[(command >> MENU_CONN_SHIFT) & MENU_CONN_MASK];
++        if ((command & APP_CMD_FOREIGN_MENU_MASK) == APP_CMD_FOREIGN_MENU_MASK) {
++            ASSERT(*_foreign_menu);
++            (*_foreign_menu)->on_command(conn_ref, command & MENU_ID_MASK);
++        }
++    }
++}
++
++void Application::add_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu)
++{
++    _pipe_connections[opaque_conn_ref & MENU_CONN_MASK] = opaque_conn_ref;
++    (*_app_menu)->add_sub(sub_menu);
++    update_menu();
++}
++
++void Application::delete_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu)
++{
++    _pipe_connections.erase(opaque_conn_ref & MENU_CONN_MASK);
++    (*_app_menu)->remove_sub(sub_menu);
++    update_menu();
++}
++
++int Application::get_foreign_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id)
++{
++    return APP_CMD_FOREIGN_MENU_MASK | ((opaque_conn_ref & MENU_CONN_MASK) << MENU_CONN_SHIFT) |
++           (msg_id & MENU_ID_MASK);
++}
++
++void Application::update_menu()
++{
++    for (size_t i = 0; i < _screens.size(); ++i) {
++        if (_screens[i]) {
++            _screens[i]->update_menu();
++        }
+     }
+ }
+
+@@ -1156,12 +1200,18 @@ void Application::on_app_activated()
+ {
+     _active = true;
+     _inputs_handler->on_focus_in();
++    if (*_foreign_menu) {
++        (*_foreign_menu)->on_activate();
++    }
+ }
+
+ void Application::on_app_deactivated()
+ {
+     _active = false;
+     _inputs_handler->on_focus_out();
++    if (*_foreign_menu) {
++        (*_foreign_menu)->on_deactivate();
++    }
+ #ifdef WIN32
+     if (!_changing_screens) {
+         exit_full_screen();
+diff --git a/client/application.h b/client/application.h
+index 213308f..67ca6f6 100644
+--- a/client/application.h
++++ b/client/application.h
+@@ -26,6 +26,7 @@
+ #include "menu.h"
+ #include "hot_keys.h"
+ #include "process_loop.h"
++#include "foreign_menu.h"
+
+ class RedScreen;
+ class Application;
+@@ -129,7 +130,7 @@ public:
+ class Application : public ProcessLoop,
+                     public Platform::EventListener,
+                     public Platform::DisplayModeListner,
+-                    public CommandTarget {
++                    public ForeignMenuInterface {
+ public:
+     Application();
+     virtual ~Application();
+@@ -152,6 +153,7 @@ public:
+     void on_activate_screen(RedScreen* screen);
+     void on_start_screen_key_interception(RedScreen* screen);
+     void on_stop_screen_key_interception(RedScreen* screen);
++    virtual void on_start_running();
+     virtual void on_app_activated();
+     virtual void on_app_deactivated();
+     virtual void on_monitors_change();
+@@ -182,6 +184,11 @@ public:
+     Menu* get_app_menu();
+     virtual void do_command(int command);
+
++    void add_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu);
++    void delete_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu);
++    int get_foreign_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id);
++    void update_menu();
++
+     static int main(int argc, char** argv, const char* version_str);
+
+ private:
+@@ -274,6 +281,8 @@ private:
+     AutoRef<Menu> _app_menu;
+     bool _during_host_switch;
+     AutoRef<SwitchHostTimer> _switch_host_timer;
++    AutoRef<ForeignMenu> _foreign_menu;
++    std::map<int32_t, int32_t> _pipe_connections;
+ };
+
+ #endif
+diff --git a/client/foreign_menu.cpp b/client/foreign_menu.cpp
+new file mode 100644
+index 0000000..407b847
+--- /dev/null
++++ b/client/foreign_menu.cpp
+@@ -0,0 +1,334 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#include "common.h"
++#include "foreign_menu.h"
++#include "foreign_menu_prot.h"
++#include "menu.h"
++#include "utils.h"
++#include "debug.h"
++#include "platform.h"
++
++#define PIPE_NAME_MAX_LEN 50
++
++#ifdef WIN32
++#define PIPE_NAME "SpiceForeignMenu-%lu"
++#elif defined(__i386__)
++#define PIPE_NAME "/tmp/SpiceForeignMenu-%llu.uds"
++#else
++#define PIPE_NAME "/tmp/SpiceForeignMenu-%lu.uds"
++#endif
++
++ForeignMenu::ForeignMenu(ForeignMenuInterface *handler)
++    : _handler (handler)
++    , _active (false)
++    , _refs (1)
++{
++    char pipe_name[PIPE_NAME_MAX_LEN];
++
++    ASSERT(_handler != NULL);
++    snprintf(pipe_name, PIPE_NAME_MAX_LEN, PIPE_NAME, Platform::get_process_id());
++    LOG_INFO("Creating a foreign menu connection %s", pipe_name);
++    _foreign_menu = NamedPipe::create(pipe_name, *this);
++    if (!_foreign_menu) {
++        LOG_ERROR("Failed to create a foreign menu connection");
++    }
++}
++
++ForeignMenu::~ForeignMenu()
++{
++    _handler = NULL;
++    std::map<NamedPipe::ConnectionRef, ForeignMenuConnection*>::const_iterator conn;
++    for (conn = _connections.begin(); conn != _connections.end(); ++conn) {
++        delete conn->second;
++    }
++    if (_foreign_menu) {
++        NamedPipe::destroy(_foreign_menu);
++    }
++}
++
++NamedPipe::ConnectionInterface& ForeignMenu::create()
++{
++    ForeignMenuConnection *conn = new ForeignMenuConnection(_handler, *this);
++
++    if (conn == NULL) {
++        throw Exception("Error allocating a new foreign menu connection");
++    }
++    return *conn;
++}
++
++void ForeignMenu::add_connection(NamedPipe::ConnectionRef conn_ref, ForeignMenuConnection *conn)
++{
++    _connections[conn_ref] = conn;
++    if (_active) {
++        send_active_state(conn, FOREIGN_MENU_APP_ACTIVATED);
++    }
++    conn->on_data();
++}
++
++void ForeignMenu::remove_connection(NamedPipe::ConnectionRef conn_ref)
++{
++    ForeignMenuConnection *conn = _connections[conn_ref];
++    _connections.erase(conn_ref);
++    delete conn;
++}
++
++void ForeignMenu::on_command(NamedPipe::ConnectionRef conn_ref, int32_t id)
++{
++    ForeignMenuConnection *conn = _connections[conn_ref];
++    FrgMenuEvent msg;
++
++    ASSERT(conn);
++    msg.base.id = FOREIGN_MENU_ITEM_EVENT;
++    msg.base.size = sizeof(FrgMenuEvent);
++    msg.id = id;
++    msg.action = FOREIGN_MENU_EVENT_CLICK;
++    conn->write_msg(&msg.base, msg.base.size);
++}
++
++void ForeignMenu::on_activate()
++{
++    std::map<NamedPipe::ConnectionRef, ForeignMenuConnection*>::const_iterator conn;
++    _active = true;
++    for (conn = _connections.begin(); conn != _connections.end(); ++conn) {
++        send_active_state(conn->second, FOREIGN_MENU_APP_ACTIVATED);
++    }
++}
++
++void ForeignMenu::on_deactivate()
++{
++    std::map<NamedPipe::ConnectionRef, ForeignMenuConnection*>::const_iterator conn;
++    _active = false;
++    for (conn = _connections.begin(); conn != _connections.end(); ++conn) {
++        send_active_state(conn->second, FOREIGN_MENU_APP_DEACTIVATED);
++    }
++}
++
++void ForeignMenu::send_active_state(ForeignMenuConnection *conn, int32_t cmd)
++{
++    FrgMenuMsg msg;
++
++    ASSERT(conn != NULL);
++    msg.id = cmd;
++    msg.size = sizeof(FrgMenuMsg);
++    conn->write_msg(&msg, msg.size);
++}
++
++ForeignMenuConnection::ForeignMenuConnection(ForeignMenuInterface *handler, ForeignMenu& parent)
++    : _handler (handler)
++    , _parent (parent)
++    , _sub_menu (NULL)
++    , _initialized (false)
++    , _write_pending (0)
++    , _write_pos (_write_buf)
++    , _read_pos (_read_buf)
++{
++}
++
++ForeignMenuConnection::~ForeignMenuConnection()
++{
++    if (_opaque != NamedPipe::INVALID_CONNECTION) {
++        NamedPipe::destroy_connection(_opaque);
++    }
++    if (_parent.handler_attached()) {
++        _handler->delete_foreign_menu(_opaque, _sub_menu);
++    }
++    if (_sub_menu) {
++        _sub_menu->unref();
++    }
++}
++
++void ForeignMenuConnection::bind(NamedPipe::ConnectionRef conn_ref)
++{
++    _opaque = conn_ref;
++    _parent.add_connection(conn_ref, this);
++}
++
++void ForeignMenuConnection::on_data()
++{
++    if (_write_pending) {
++        LOG_INFO("Resume pending write %d", _write_pending);
++        if (!write_msg(_write_pos, _write_pending)) {
++            return;
++        }
++    }
++    while (read_msgs());
++}
++
++bool ForeignMenuConnection::read_msgs()
++{
++    uint8_t *pos = _read_buf;
++    size_t nread = _read_pos - _read_buf;
++    int32_t size;
++
++    ASSERT(_handler != NULL);
++    ASSERT(_opaque != NamedPipe::INVALID_CONNECTION);
++    size = NamedPipe::read(_opaque, (uint8_t*)_read_pos, sizeof(_read_buf) - nread);
++    if (size == 0) {
++        return false;
++    } else if (size < 0) {
++        LOG_ERROR("Error reading from named pipe %d", size);
++        _parent.remove_connection(_opaque);
++        return false;
++    }
++    nread += size;
++    while (nread > 0) {
++        if (!_initialized && nread >= sizeof(FrgMenuInitHeader)) {
++            FrgMenuInitHeader *init = (FrgMenuInitHeader *)pos;
++            if (init->magic != FOREIGN_MENU_MAGIC || init->version != FOREIGN_MENU_VERSION) {
++                LOG_ERROR("Bad foreign menu init, magic=0x%x version=%u", init->magic,
++                          init->version);
++                _parent.remove_connection(_opaque);
++                return false;
++            }
++            if (nread < init->size) {
++                break;
++            }
++            if (!handle_init((FrgMenuInit*)init)) {
++                _parent.remove_connection(_opaque);
++                return false;
++            }
++            nread -= init->size;
++            pos += init->size;
++            _initialized = true;
++        }
++        if (!_initialized || nread < sizeof(FrgMenuMsg)) {
++            break;
++        }
++        FrgMenuMsg *hdr = (FrgMenuMsg *)pos;
++        if (hdr->size < sizeof(FrgMenuMsg)) {
++            LOG_ERROR("Bad foreign menu message, size=%u", hdr->size);
++            _parent.remove_connection(_opaque);
++            return false;
++        }
++        if (nread < hdr->size) {
++            break;
++        }
++        handle_message(hdr);
++        nread -= hdr->size;
++        pos += hdr->size;
++    }
++    if (nread > 0 && pos != _read_buf) {
++        memcpy(_read_buf, pos, nread);
++    }
++    _read_pos = _read_buf + nread;
++    return true;
++}
++
++bool ForeignMenuConnection::write_msg(const void *buf, int len)
++{
++    uint8_t *pos;
++    int32_t written = 0;
++
++    ASSERT(_opaque != NamedPipe::INVALID_CONNECTION);
++    if (_write_pending && buf != _write_pos) {
++        if (_write_pending + len > sizeof(_write_buf)) {
++            DBG(0, "Dropping msg due to pending write %d", _write_pending);
++            return false;
++        }
++        memcpy(_write_buf + _write_pending, buf, len);
++        _write_pending += len;
++        return true;
++    }
++    pos = (uint8_t*)buf;
++    while (len && (written = NamedPipe::write(_opaque, pos, len)) > 0) {
++        pos += written;
++        len -= written;
++    }
++    if (len && written == 0) {
++        if (_write_pending) {
++            _write_pos = pos;
++        } else {
++            _write_pos = _write_buf;
++            memcpy(_write_buf, pos, len);
++        }
++        _write_pending = len;
++    } else if (written < 0) {
++        LOG_ERROR("Error writing to named pipe %d", written);
++        _parent.remove_connection(_opaque);
++        return false;
++    } else {
++        _write_pending = 0;
++    }
++    return true;
++}
++
++bool ForeignMenuConnection::handle_init(FrgMenuInit *init)
++{
++    std::string title = "Untitled";
++
++    if (_sub_menu) {
++        LOG_ERROR("Foreign menu already initialized");
++        return false;
++    }
++    if (init->credentials != 0) {
++        LOG_ERROR("Foreign menu has wrong credentials 0x%x", init->credentials);
++        return false;
++    }
++    if (init->base.size > offsetof(FrgMenuInit, title)) {
++        ((char*)init)[init->base.size - 1] = '\0';
++        title = (char*)init->title;
++    }
++    _sub_menu = new Menu((CommandTarget&)*_handler, title);
++    _handler->add_foreign_menu(_opaque, _sub_menu);
++    return true;
++}
++
++bool ForeignMenuConnection::handle_message(FrgMenuMsg *hdr)
++{
++    ASSERT(_sub_menu);
++    switch (hdr->id) {
++    case FOREIGN_MENU_SET_TITLE:
++        ((char*)hdr)[hdr->size - 1] = '\0';
++        _sub_menu->set_name((char*)((FrgMenuSetTitle*)hdr)->string);
++        break;
++    case FOREIGN_MENU_ADD_ITEM: {
++        FrgMenuAddItem *msg = (FrgMenuAddItem*)hdr;
++        ((char*)hdr)[hdr->size - 1] = '\0';
++        int id = _handler->get_foreign_menu_item_id(_opaque, msg->id);
++        _sub_menu->add_command((char*)msg->string, id, get_item_state(msg->type));
++        break;
++    }
++    case FOREIGN_MENU_REMOVE_ITEM: {
++        int id = _handler->get_foreign_menu_item_id(_opaque, ((FrgMenuRmItem*)hdr)->id);
++        _sub_menu->remove_command(id);
++        break;
++    }
++    case FOREIGN_MENU_CLEAR:
++        _sub_menu->clear();
++        break;
++    case FOREIGN_MENU_MODIFY_ITEM:
++    default:
++        LOG_ERROR("Ignoring an unknown foreign menu identifier %u", hdr->id);
++        return false;
++    }
++    _handler->update_menu();
++    return true;
++}
++
++int ForeignMenuConnection::get_item_state(int item_type)
++{
++    int state = 0;
++
++    if (item_type & FOREIGN_MENU_ITEM_TYPE_CHECKED) {
++        state |= Menu::MENU_ITEM_STATE_CHECKED;
++    }
++    if (item_type & FOREIGN_MENU_ITEM_TYPE_DIM) {
++        state |= Menu::MENU_ITEM_STATE_DIM;
++    }
++    return state;
++}
+diff --git a/client/foreign_menu.h b/client/foreign_menu.h
+new file mode 100644
+index 0000000..b0f1a8c
+--- /dev/null
++++ b/client/foreign_menu.h
+@@ -0,0 +1,93 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#ifndef _H_FOREIGN_MENU
++#define _H_FOREIGN_MENU
++
++#include "named_pipe.h"
++#include "menu.h"
++
++class ForeignMenuConnection;
++struct FrgMenuInit;
++struct FrgMenuMsg;
++
++class ForeignMenuInterface : public CommandTarget {
++public:
++    virtual ~ForeignMenuInterface() {}
++
++    virtual void add_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu) = 0;
++    virtual void delete_foreign_menu(int32_t opaque_conn_ref, Menu* sub_menu) = 0;
++    virtual int get_foreign_menu_item_id(int32_t opaque_conn_ref, uint32_t msg_id) = 0;
++    virtual void update_menu() = 0;
++};
++
++class ForeignMenu : public NamedPipe::ListenerInterface {
++public:
++    ForeignMenu(ForeignMenuInterface *handler);
++    virtual ~ForeignMenu();
++
++    bool handler_attached() { return !!_handler;}
++    ForeignMenu* ref() { _refs++; return this;}
++    void unref() { if (!--_refs) delete this;}
++
++    virtual NamedPipe::ConnectionInterface &create();
++    void add_connection(NamedPipe::ConnectionRef conn_ref, ForeignMenuConnection *conn);
++    void remove_connection(NamedPipe::ConnectionRef conn_ref);
++    void on_command(NamedPipe::ConnectionRef conn_ref, int32_t id);
++    void on_activate();
++    void on_deactivate();
++
++private:
++    void send_active_state(ForeignMenuConnection *conn, int32_t cmd);
++
++private:
++    ForeignMenuInterface *_handler;
++    std::map<NamedPipe::ConnectionRef, ForeignMenuConnection*> _connections;
++    NamedPipe::ListenerRef _foreign_menu;
++    bool _active;
++    int _refs;
++};
++
++#define FOREIGN_MENU_BUF_SIZE 4096
++
++class ForeignMenuConnection : public NamedPipe::ConnectionInterface {
++public:
++    ForeignMenuConnection(ForeignMenuInterface *handler, ForeignMenu& parent);
++    virtual ~ForeignMenuConnection();
++    virtual void bind(NamedPipe::ConnectionRef conn_ref);
++    virtual void on_data();
++    bool write_msg(const void *buf, int len);
++
++private:
++    bool read_msgs();
++    bool handle_init(FrgMenuInit *init);
++    bool handle_message(FrgMenuMsg *hdr);
++    int get_item_state(int item_type);
++
++private:
++    ForeignMenuInterface *_handler;
++    ForeignMenu& _parent;
++    Menu* _sub_menu;
++    bool _initialized;
++    int _write_pending;
++    uint8_t *_write_pos;
++    uint8_t *_read_pos;
++    uint8_t _write_buf[FOREIGN_MENU_BUF_SIZE];
++    uint8_t _read_buf[FOREIGN_MENU_BUF_SIZE];
++};
++
++#endif
+diff --git a/client/foreign_menu_prot.h b/client/foreign_menu_prot.h
+new file mode 100644
+index 0000000..bac12ec
+--- /dev/null
++++ b/client/foreign_menu_prot.h
+@@ -0,0 +1,107 @@
++/*
++   Copyright (C) 2009 Red Hat, Inc.
++
++   This program is free software; you can redistribute it and/or
++   modify it under the terms of the GNU General Public License as
++   published by the Free Software Foundation; either version 2 of
++   the License, or (at your option) any later version.
++
++   This program is distributed in the hope that it will be useful,
++   but WITHOUT ANY WARRANTY; without even the implied warranty of
++   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++   GNU General Public License for more details.
++
++   You should have received a copy of the GNU General Public License
++   along with this program.  If not, see <http://www.gnu.org/licenses/>.
++*/
++
++#ifndef _H_FOREIGN_MENU_PROT
++#define _H_FOREIGN_MENU_PROT
++
++#define FOREIGN_MENU_MAGIC      (*(uint32_t*)"FRGM")
++#define FOREIGN_MENU_VERSION    1
++
++#ifdef __GNUC__
++#define ATTR_PACKED __attribute__ ((__packed__))
++#else
++#define ATTR_PACKED __declspec(align(1))
++#endif
++
++typedef struct ATTR_PACKED FrgMenuInitHeader {
++    uint32_t magic;
++    uint32_t version;
++    uint32_t size;
++} FrgMenuInitHeader;
++
++typedef struct ATTR_PACKED FrgMenuInit {
++    FrgMenuInitHeader base;
++    uint64_t credentials;
++    uint8_t title[0]; //UTF8
++} FrgMenuInit;
++
++typedef struct ATTR_PACKED FrgMenuMsg {
++    uint32_t id;
++    uint32_t size;
++} FrgMenuMsg;
++
++enum {
++    //extrenal app -> spice client
++    FOREIGN_MENU_SET_TITLE = 1,
++    FOREIGN_MENU_ADD_ITEM,
++    FOREIGN_MENU_MODIFY_ITEM,
++    FOREIGN_MENU_REMOVE_ITEM,
++    FOREIGN_MENU_CLEAR,
++
++    //spice client -> external app
++    FOREIGN_MENU_ITEM_EVENT = 1001,
++    FOREIGN_MENU_APP_ACTIVATED,
++    FOREIGN_MENU_APP_DEACTIVATED,
++};
++
++typedef struct ATTR_PACKED FrgMenuSetTitle {
++    FrgMenuMsg base;
++    uint8_t string[0]; //UTF8
++} FrgMenuSetTitle;
++
++enum {
++    FOREIGN_MENU_ITEM_TYPE_CHECKED      = 1 << 0,
++    FOREIGN_MENU_ITEM_TYPE_DIM          = 1 << 1,
++    FOREIGN_MENU_ITEM_TYPE_SEPARATOR    = 1 << 2
++};
++
++#define FOREIGN_MENU_INVALID_ID 0
++
++typedef struct ATTR_PACKED FrgMenuAddItem {
++    FrgMenuMsg base;
++    uint32_t id;
++    uint32_t type;
++    uint32_t position;
++    uint8_t string[0]; //UTF8
++} FrgMenuAddItem, FrgMenuModItem;
++
++typedef struct ATTR_PACKED FrgMenuRmItem {
++    FrgMenuMsg base;
++    uint32_t id;
++} FrgMenuRmItem;
++
++typedef struct FrgMenuMsg FrgMenuRmItems;
++typedef struct FrgMenuMsg FrgMenuDelete;
++
++enum {
++    FOREIGN_MENU_EVENT_CLICK,
++    FOREIGN_MENU_EVENT_CHECKED,
++    FOREIGN_MENU_EVENT_UNCHECKED
++};
++
++typedef struct ATTR_PACKED FrgMenuEvent {
++    FrgMenuMsg base;
++    uint32_t id;
++    uint32_t action; //FOREIGN_MENU_EVENT_?
++} FrgMenuEvent;
++
++typedef struct FrgMenuMsg FrgMenuActivate;
++typedef struct FrgMenuMsg FrgMenuDeactivate;
++
++#undef ATTR_PACKED
++
++#endif
+diff --git a/client/process_loop.cpp b/client/process_loop.cpp
+index 794f29d..a717fbc 100644
+--- a/client/process_loop.cpp
++++ b/client/process_loop.cpp
+@@ -49,7 +49,7 @@ void SyncEvent::response(AbstractProcessLoop& events_loop)
+ void SyncEvent::wait()
+ {
+ #ifdef RED_DEBUG
+-    ASSERT(!_process_loop || !_process_loop->is_same_thread(pthread_self()));
++    ASSERT(_process_loop && !_process_loop->is_same_thread(pthread_self()));
+ #endif
+     Lock lock(_mutex);
+     while (!_ready) {
+@@ -123,9 +123,6 @@ void EventsQueue::process_events()
+
+         lock.unlock();
+         event->response(_owner);
+-#ifdef RED_DEBUG
+-        event->set_process_loop(NULL);
+-#endif
+         event->unref();
+     }
+ }
+@@ -260,13 +257,12 @@ void TimersQueue::timers_action()
+ }
+
+ ProcessLoop::ProcessLoop(void* owner)
+-    : _events_queue (*this)
++    : _started (false)
++    , _events_queue (*this)
+     , _timers_queue (*this)
+     , _owner (owner)
+     , _quitting (false)
+     , _exit_code (0)
+-    , _started (false)
+-
+ {
+     _event_sources.add_trigger(_wakeup_trigger);
+ }
+@@ -280,6 +276,7 @@ int ProcessLoop::run()
+ {
+     _thread = pthread_self();
+     _started = true;
++    on_start_running();
+     for (;;) {
+         if (_event_sources.wait_events(_timers_queue.get_soonest_timeout())) {
+             _quitting = true;
+diff --git a/client/process_loop.h b/client/process_loop.h
+index ea9eea4..6c5e8b9 100644
+--- a/client/process_loop.h
++++ b/client/process_loop.h
+@@ -220,11 +220,16 @@ protected:
+         virtual void on_event() {}
+     };
+
++    virtual void on_start_running() {}
+     void wakeup();
+     void do_quit(int error_code);
+
+     friend class QuitEvent; // allowing access to quit
+
++protected:
++    bool _started;
++    pthread_t _thread;
++
+ private:
+     EventSources _event_sources;
+     EventsQueue _events_queue;
+@@ -236,8 +241,6 @@ private:
+
+     bool _quitting;
+     int _exit_code;
+-    bool _started;
+-    pthread_t _thread;
+ };
+
+ #endif
+diff --git a/client/screen.cpp b/client/screen.cpp
+index bbc76e7..914a7fd 100644
+--- a/client/screen.cpp
++++ b/client/screen.cpp
+@@ -89,8 +89,7 @@ RedScreen::RedScreen(Application& owner, int id, const std::wstring& name, int w
+         THROW("create inactive cursor failed");
+     }
+     _window.set_cursor(_default_cursor);
+-    AutoRef<Menu> menu(_owner.get_app_menu());
+-    _window.set_menu(*menu);
++    update_menu();
+     AutoRef<Icon> icon(Platform::load_icon(RED_ICON_RES_ID));
+     _window.set_icon(*icon);
+     _window.start_key_interception();
+@@ -726,6 +725,12 @@ void RedScreen::external_show()
+     _window.external_show();
+ }
+
++void RedScreen::update_menu()
++{
++    AutoRef<Menu> menu(_owner.get_app_menu());
++    _window.set_menu(*menu);
++}
++
+ void RedScreen::on_exposed_rect(const Rect& area)
+ {
+     if (is_out_of_sync()) {
+diff --git a/client/screen.h b/client/screen.h
+index b191d09..b78f838 100644
+--- a/client/screen.h
++++ b/client/screen.h
+@@ -80,6 +80,7 @@ public:
+     void show();
+     void activate();
+     void external_show();
++    void update_menu();
+
+     int get_id() { return _id;}
+     int get_screen_id();
+diff --git a/client/x11/Makefile.am b/client/x11/Makefile.am
+index 1fd0eaf..d48ef87 100644
+--- a/client/x11/Makefile.am
++++ b/client/x11/Makefile.am
+@@ -50,6 +50,9 @@ RED_COMMON_SRCS = 					\
+ 	$(CLIENT_DIR)/debug.h				\
+ 	$(CLIENT_DIR)/display_channel.cpp		\
+ 	$(CLIENT_DIR)/display_channel.h			\
++ 	$(CLIENT_DIR)/foreign_menu.cpp			\
++ 	$(CLIENT_DIR)/foreign_menu.h			\
++ 	$(CLIENT_DIR)/foreign_menu_prot.h		\
+ 	$(CLIENT_DIR)/red_gl_canvas.cpp			\
+ 	$(CLIENT_DIR)/red_gl_canvas.h			\
+ 	$(CLIENT_DIR)/gl_canvas.cpp			\
+-- 
+1.6.6.1
+

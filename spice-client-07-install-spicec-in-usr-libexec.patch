@@ -1,0 +1,162 @@
+From ba1cec77e978893434bd635fac48a5f1420b44c7 Mon Sep 17 00:00:00 2001
+From: Uri Lublin <uril@redhat.com>
+Date: Wed, 24 Mar 2010 04:25:32 +0200
+Subject: [PATCH] spice: client: x11: install spicec in /usr/libexec (#576437)
+
+spicec is to be used only by RHEV-M via spice-xpi.
+---
+ client/x11/Makefile.am |    2 +-
+ client/x11/Makefile.in |   58 ++++++++++++++++++++++++------------------------
+ 2 files changed, 30 insertions(+), 30 deletions(-)
+
+diff --git a/client/x11/Makefile.am b/client/x11/Makefile.am
+index 1fd0eaf..281eac3 100644
+--- a/client/x11/Makefile.am
++++ b/client/x11/Makefile.am
+@@ -102,7 +102,7 @@ RED_COMMON_SRCS = 					\
+ 	$(CLIENT_DIR)/icon.h                        	\
+ 	$(NULL)
+
+-bin_PROGRAMS = spicec
++libexec_PROGRAMS = spicec
+
+ spicec_SOURCES =			\
+ 	atomic_count.h			\
+diff --git a/client/x11/Makefile.in b/client/x11/Makefile.in
+index f195f6e..ff8745a 100644
+--- a/client/x11/Makefile.in
++++ b/client/x11/Makefile.in
+@@ -34,7 +34,7 @@ PRE_UNINSTALL = :
+ POST_UNINSTALL = :
+ build_triplet = @build@
+ host_triplet = @host@
+-bin_PROGRAMS = spicec$(EXEEXT)
++libexec_PROGRAMS = spicec$(EXEEXT)
+ subdir = x11
+ DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in \
+ 	$(srcdir)/ffmpeg_inc.h.in
+@@ -48,8 +48,8 @@ mkinstalldirs = $(install_sh) -d
+ CONFIG_HEADER = $(top_builddir)/config.h
+ CONFIG_CLEAN_FILES = ffmpeg_inc.h
+ CONFIG_CLEAN_VPATH_FILES =
+-am__installdirs = "$(DESTDIR)$(bindir)"
+-PROGRAMS = $(bin_PROGRAMS)
++am__installdirs = "$(DESTDIR)$(libexecdir)"
++PROGRAMS = $(libexec_PROGRAMS)
+ am__objects_1 =
+ am__objects_2 = application.$(OBJEXT) cairo_canvas.$(OBJEXT) \
+ 	canvas.$(OBJEXT) canvas_utils.$(OBJEXT) \
+@@ -451,10 +451,10 @@ $(ACLOCAL_M4): @MAINTAINER_MODE_TRUE@ $(am__aclocal_m4_deps)
+ $(am__aclocal_m4_deps):
+ ffmpeg_inc.h: $(top_builddir)/config.status $(srcdir)/ffmpeg_inc.h.in
+ 	cd $(top_builddir) && $(SHELL) ./config.status $(subdir)/$@
+-install-binPROGRAMS: $(bin_PROGRAMS)
++install-libexecPROGRAMS: $(libexec_PROGRAMS)
+ 	@$(NORMAL_INSTALL)
+-	test -z "$(bindir)" || $(MKDIR_P) "$(DESTDIR)$(bindir)"
+-	@list='$(bin_PROGRAMS)'; test -n "$(bindir)" || list=; \
++	test -z "$(libexecdir)" || $(MKDIR_P) "$(DESTDIR)$(libexecdir)"
++	@list='$(libexec_PROGRAMS)'; test -n "$(libexecdir)" || list=; \
+ 	for p in $$list; do echo "$$p $$p"; done | \
+ 	sed 's/$(EXEEXT)$$//' | \
+ 	while read p p1; do if test -f $$p; \
+@@ -471,23 +471,23 @@ install-binPROGRAMS: $(bin_PROGRAMS)
+ 	while read type dir files; do \
+ 	    if test "$$dir" = .; then dir=; else dir=/$$dir; fi; \
+ 	    test -z "$$files" || { \
+-	      echo " $(INSTALL_PROGRAM_ENV) $(INSTALL_PROGRAM) $$files '$(DESTDIR)$(bindir)$$dir'"; \
+-	      $(INSTALL_PROGRAM_ENV) $(INSTALL_PROGRAM) $$files "$(DESTDIR)$(bindir)$$dir" || exit $$?; \
++	      echo " $(INSTALL_PROGRAM_ENV) $(INSTALL_PROGRAM) $$files '$(DESTDIR)$(libexecdir)$$dir'"; \
++	      $(INSTALL_PROGRAM_ENV) $(INSTALL_PROGRAM) $$files "$(DESTDIR)$(libexecdir)$$dir" || exit $$?; \
+ 	    } \
+ 	; done
+
+-uninstall-binPROGRAMS:
++uninstall-libexecPROGRAMS:
+ 	@$(NORMAL_UNINSTALL)
+-	@list='$(bin_PROGRAMS)'; test -n "$(bindir)" || list=; \
++	@list='$(libexec_PROGRAMS)'; test -n "$(libexecdir)" || list=; \
+ 	files=`for p in $$list; do echo "$$p"; done | \
+ 	  sed -e 'h;s,^.*/,,;s/$(EXEEXT)$$//;$(transform)' \
+ 	      -e 's/$$/$(EXEEXT)/' `; \
+ 	test -n "$$list" || exit 0; \
+-	echo " ( cd '$(DESTDIR)$(bindir)' && rm -f" $$files ")"; \
+-	cd "$(DESTDIR)$(bindir)" && rm -f $$files
++	echo " ( cd '$(DESTDIR)$(libexecdir)' && rm -f" $$files ")"; \
++	cd "$(DESTDIR)$(libexecdir)" && rm -f $$files
+
+-clean-binPROGRAMS:
+-	-test -z "$(bin_PROGRAMS)" || rm -f $(bin_PROGRAMS)
++clean-libexecPROGRAMS:
++	-test -z "$(libexec_PROGRAMS)" || rm -f $(libexec_PROGRAMS)
+ spicec$(EXEEXT): $(spicec_OBJECTS) $(spicec_DEPENDENCIES) 
+ 	@rm -f spicec$(EXEEXT)
+ 	$(spicec_LINK) $(spicec_OBJECTS) $(spicec_LDADD) $(LIBS)
+@@ -1206,7 +1206,7 @@ check: check-recursive
+ all-am: Makefile $(PROGRAMS)
+ installdirs: installdirs-recursive
+ installdirs-am:
+-	for dir in "$(DESTDIR)$(bindir)"; do \
++	for dir in "$(DESTDIR)$(libexecdir)"; do \
+ 	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
+ 	done
+ install: install-recursive
+@@ -1236,7 +1236,7 @@ maintainer-clean-generic:
+ 	@echo "it deletes files that may require special tools to rebuild."
+ clean: clean-recursive
+
+-clean-am: clean-binPROGRAMS clean-generic mostlyclean-am
++clean-am: clean-generic clean-libexecPROGRAMS mostlyclean-am
+
+ distclean: distclean-recursive
+ 	-rm -rf ./$(DEPDIR)
+@@ -1262,7 +1262,7 @@ install-dvi: install-dvi-recursive
+
+ install-dvi-am:
+
+-install-exec-am: install-binPROGRAMS
++install-exec-am: install-libexecPROGRAMS
+
+ install-html: install-html-recursive
+
+@@ -1301,25 +1301,25 @@ ps: ps-recursive
+
+ ps-am:
+
+-uninstall-am: uninstall-binPROGRAMS
++uninstall-am: uninstall-libexecPROGRAMS
+
+ .MAKE: $(RECURSIVE_CLEAN_TARGETS) $(RECURSIVE_TARGETS) ctags-recursive \
+ 	install-am install-strip tags-recursive
+
+ .PHONY: $(RECURSIVE_CLEAN_TARGETS) $(RECURSIVE_TARGETS) CTAGS GTAGS \
+-	all all-am check check-am clean clean-binPROGRAMS \
+-	clean-generic ctags ctags-recursive distclean \
++	all all-am check check-am clean clean-generic \
++	clean-libexecPROGRAMS ctags ctags-recursive distclean \
+ 	distclean-compile distclean-generic distclean-tags distdir dvi \
+ 	dvi-am html html-am info info-am install install-am \
+-	install-binPROGRAMS install-data install-data-am install-dvi \
+-	install-dvi-am install-exec install-exec-am install-html \
+-	install-html-am install-info install-info-am install-man \
+-	install-pdf install-pdf-am install-ps install-ps-am \
+-	install-strip installcheck installcheck-am installdirs \
+-	installdirs-am maintainer-clean maintainer-clean-generic \
+-	mostlyclean mostlyclean-compile mostlyclean-generic pdf pdf-am \
+-	ps ps-am tags tags-recursive uninstall uninstall-am \
+-	uninstall-binPROGRAMS
++	install-data install-data-am install-dvi install-dvi-am \
++	install-exec install-exec-am install-html install-html-am \
++	install-info install-info-am install-libexecPROGRAMS \
++	install-man install-pdf install-pdf-am install-ps \
++	install-ps-am install-strip installcheck installcheck-am \
++	installdirs installdirs-am maintainer-clean \
++	maintainer-clean-generic mostlyclean mostlyclean-compile \
++	mostlyclean-generic pdf pdf-am ps ps-am tags tags-recursive \
++	uninstall uninstall-am uninstall-libexecPROGRAMS
+
+
+ # Tell versions [3.59,3.63) of GNU make to not export all variables.
+-- 
+1.6.6.1
+

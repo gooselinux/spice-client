@@ -1,0 +1,56 @@
+From 273a460eebb3c2fd93978dff4d1fa0e21a858456 Mon Sep 17 00:00:00 2001
+From: Alon Levy <alevy@redhat.com>
+Date: Wed, 10 Mar 2010 21:19:53 +0200
+Subject: [PATCH] spice: client: fix handling of top down images in video streams (#576151)
+
+Rebased from RHEL-5:
+
+commit de3460c93c941a4456f932a630ca78b73f323b09
+Author: Yonit Halperin <yhalperi@redhat.com>
+Date:   Mon Jan 18 13:15:16 2010 +0200
+
+    spice: client: fix handling of top down images in video streams (556741)
+
+    Top down streams arrive from x11-qxl driver.
+---
+ client/display_channel.cpp |   14 +++++---------
+ 1 files changed, 5 insertions(+), 9 deletions(-)
+
+diff --git a/client/display_channel.cpp b/client/display_channel.cpp
+index ed8f2c9..b669665 100644
+--- a/client/display_channel.cpp
++++ b/client/display_channel.cpp
+@@ -128,8 +128,9 @@ static inline void yuv420_to_rgb(AVFrame* frame, uint8_t* data, uint32_t width,
+     ASSERT(width % 2 == 0);
+     ASSERT(height % 2 == 0);
+
++    /* turning it to be down to top */
+     if (top_down) {
+-        data += stride * height - 1;
++        data += stride * (height - 1);
+         stride = -stride;
+     }
+
+@@ -333,16 +334,11 @@ VideoStream::VideoStream(RedClient& client, Canvas& canvas, DisplayChannel& chan
+         _pixmap.width = src_width;
+         _pixmap.height = src_height;
+
+-        if (top_down) {
+-            _pixmap.data = _uncompressed_data;
+-            _pixmap.stride = _stride;
+-        } else {
+ #ifdef WIN32
+-            SetViewportOrgEx(_dc, 0, stream_height - src_height, NULL);
++        SetViewportOrgEx(_dc, 0, stream_height - src_height, NULL);
+ #endif
+-            _pixmap.data = _uncompressed_data + _stride * (src_height - 1);
+-            _pixmap.stride = -_stride;
+-        }
++        _pixmap.data = _uncompressed_data + _stride * (src_height - 1);
++        _pixmap.stride = -_stride;
+
+         set_clip(clip_type, num_clip_rects, clip_rects);
+
+-- 
+1.6.6.1
+

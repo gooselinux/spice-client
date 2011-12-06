@@ -1,0 +1,30 @@
+From 5e11a130616d87fc79f1d542a5bc2a9385c6c2b0 Mon Sep 17 00:00:00 2001
+From: Alon Levy <alevy@redhat.com>
+Date: Tue, 22 Jun 2010 10:32:09 +0300
+Subject: [PATCH] client: spicec --full-screen=auto-conf do not resize after migration #584318
+
+When running spicec --full-screen=auto-conf and then migrating the machine,
+after migration is complete spicec issues a new request to the vdagent to
+resize the screen. This is a result of the new "disconnect/connect" migration
+introduced recently. There is even functionality to avoid sending a monitor
+message twice already, but on disconnect it is explicitly reset. The one line
+solution is to not reset _agent_mon_config_sent
+---
+ client/red_client.cpp |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/client/red_client.cpp b/client/red_client.cpp
+index 64b518a..6a5d7b9 100644
+--- a/client/red_client.cpp
++++ b/client/red_client.cpp
+@@ -577,6 +577,7 @@ void RedClient::send_agent_monitors_config()
+     _agent_tokens--;
+     post_message(message);
+     _agent_mon_config_sent = true;
++    _auto_display_res = false; // XXX: remove once migration is back to normal,
+ }
+
+ #define MIN_DISPLAY_PIXMAP_CACHE (1024 * 1024 * 20)
+-- 
+1.7.0.1
+

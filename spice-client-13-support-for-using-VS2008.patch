@@ -1,0 +1,61 @@
+From 56196e79bb4404c60fc8e0431c2506e495c9a0d8 Mon Sep 17 00:00:00 2001
+From: Arnon Gilboa <agilboa@redhat.com>
+Date: Tue, 23 Mar 2010 16:21:24 +0200
+Subject: [PATCH] spice client: convert solution & project to VS2008 #576639
+
+Change solution and project files (not in the patch for linux client).
+
+VS2008 does not like a #define to appear above #include files,
+so move it into its own .h file.
+---
+ client/display_channel.cpp |    6 +-----
+ client/glext_proto.h       |    6 ++++++
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+ create mode 100644 client/glext_proto.h
+
+diff --git a/client/display_channel.cpp b/client/display_channel.cpp
+index b669665..5f69abf 100644
+--- a/client/display_channel.cpp
++++ b/client/display_channel.cpp
+@@ -15,8 +15,7 @@
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+-#define GL_GLEXT_PROTOTYPES
+-
++#include "glext_proto.h"
+ #include "common.h"
+ #include "canvas.h"
+ #include "red_pixmap.h"
+@@ -25,7 +24,6 @@
+ #endif
+ #include "debug.h"
+ #include "utils.h"
+-#include "common.h"
+ #include "display_channel.h"
+ #include "application.h"
+ #include "screen.h"
+@@ -34,8 +32,6 @@
+ #endif
+ #include "red_cairo_canvas.h"
+ #include "red_client.h"
+-#include "utils.h"
+-#include "debug.h"
+ #ifdef WIN32
+ #include "red_gdi_canvas.h"
+ #endif
+diff --git a/client/glext_proto.h b/client/glext_proto.h
+new file mode 100644
+index 0000000..0ad39fe
+--- /dev/null
++++ b/client/glext_proto.h
+@@ -0,0 +1,6 @@
++#ifndef _H_GLEXT_PROTO
++#define _H_GLEXT_PROTO
++
++#define GL_GLEXT_PROTOTYPES
++
++#endif
+-- 
+1.6.6.1
+

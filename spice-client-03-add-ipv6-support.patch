@@ -1,0 +1,137 @@
+From d8af90aa4c04378d7d6d7949db1ab1c2377cfb96 Mon Sep 17 00:00:00 2001
+From: Gerd Hoffmann <kraxel@redhat.com>
+Date: Thu, 25 Feb 2010 14:52:36 +0100
+Subject: [PATCH 2/2] spice client: add ipv6 support. #566444
+
+Signed-off-by: Gerd Hoffmann <kraxel@redhat.com>
+---
+ client/red_peer.cpp |   94 +++++++++++++++++++++++----------------------------
+ client/red_peer.h   |    2 -
+ 2 files changed, 42 insertions(+), 54 deletions(-)
+
+diff --git a/client/red_peer.cpp b/client/red_peer.cpp
+index 9db48e4..007559c 100644
+--- a/client/red_peer.cpp
++++ b/client/red_peer.cpp
+@@ -111,64 +111,54 @@ void RedPeer::cleanup()
+     }
+ }
+
+-uint32_t RedPeer::host_by_name(const char* host)
++void RedPeer::connect_unsecure(const char* host, int portnr)
+ {
+-    struct addrinfo *e, *result = NULL;
+-    struct sockaddr_in *addr;
+-    uint32_t return_value;
+-    int rc;
+-
+-    rc = getaddrinfo(host, NULL, NULL, &result);
+-    for (e = result; e != NULL; e = e->ai_next) {
+-        if (e->ai_family == PF_INET)
+-            break;
+-    }
+-    if (rc != 0 || e == NULL) {
+-        if (result)
+-            freeaddrinfo(result);
+-        THROW_ERR(SPICEC_ERROR_CODE_GETHOSTBYNAME_FAILED, "cannot resolve host address %s", host);
+-    }
+-
+-    addr = (sockaddr_in *)e->ai_addr;
+-    return_value = addr->sin_addr.s_addr;
+-
+-    freeaddrinfo(result);
+-
+-    DBG(0, "%s = %u", host, return_value);
+-    return ntohl(return_value);
+-}
+-
+-void RedPeer::connect_unsecure(const char* host, int port)
+-{
+-    struct sockaddr_in addr;
+-    int no_delay;
+-    uint32_t ip;
++    struct addrinfo ai, *result = NULL, *e;
++    char uaddr[INET6_ADDRSTRLEN+1];
++    char uport[33], port[33];
++    int err = 0, rc, no_delay = 1;
+     ASSERT(_ctx == NULL && _ssl == NULL && _peer == INVALID_SOCKET);
+     try {
+-        ip = host_by_name(host);
+-
+-        addr.sin_port = htons(port);
+-        addr.sin_family = AF_INET;
+-        addr.sin_addr.s_addr = htonl(ip);
+-
+-        Lock lock(_lock);
+-        if ((_peer = socket(PF_INET, SOCK_STREAM, IPPROTO_TCP)) == INVALID_SOCKET) {
+-            int err = sock_error();
+-            THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
+-                      sock_err_message(err), err);
++        memset(&ai,0, sizeof(ai));
++        ai.ai_flags = AI_CANONNAME | AI_ADDRCONFIG;
++        ai.ai_family = PF_UNSPEC;
++        ai.ai_socktype = SOCK_STREAM;
++        snprintf(port, sizeof(port), "%d", portnr);
++        rc = getaddrinfo(host, port, &ai, &result);
++        if (rc != 0) {
++            THROW_ERR(SPICEC_ERROR_CODE_GETHOSTBYNAME_FAILED, "cannot resolve host address %s", host);
+         }
++        Lock lock(_lock);
++        _peer = -1;
++        for (e = result; e != NULL; e = e->ai_next) {
++            if ((_peer = socket(e->ai_family, e->ai_socktype, e->ai_protocol)) == INVALID_SOCKET) {
++                int err = sock_error();
++                THROW_ERR(SPICEC_ERROR_CODE_SOCKET_FAILED, "failed to create socket: %s (%d)",
++                          sock_err_message(err), err);
++            }
++            if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay)) ==
++                SOCKET_ERROR) {
++                LOG_WARN("set TCP_NODELAY failed");
++            }
+
+-        no_delay = 1;
+-        if (setsockopt(_peer, IPPROTO_TCP, TCP_NODELAY, (const char*)&no_delay, sizeof(no_delay)) ==
+-                                                                                     SOCKET_ERROR) {
+-            LOG_WARN("set TCP_NODELAY failed");
++            getnameinfo((struct sockaddr*)e->ai_addr, e->ai_addrlen,
++                        uaddr,INET6_ADDRSTRLEN, uport,32,
++                        NI_NUMERICHOST | NI_NUMERICSERV);
++            LOG_INFO("Trying %s %s", uaddr, uport);
++            if (::connect(_peer, e->ai_addr, e->ai_addrlen) == SOCKET_ERROR) {
++                err = sock_error();
++                LOG_INFO("Connect failed: %s (%d)",
++                         sock_err_message(err), err);
++                closesocket(_peer);
++                _peer = -1;
++                continue;
++            }
++            LOG_INFO("Connected to %s %s", uaddr, uport);
++            break;
+         }
+-
+-        LOG_INFO("Connecting %s %d", inet_ntoa(addr.sin_addr), port);
+         lock.unlock();
+-        if (::connect(_peer, (struct sockaddr *)&addr, sizeof(sockaddr_in)) == SOCKET_ERROR) {
+-            int err = sock_error();
+-            closesocket(_peer);
++        freeaddrinfo(result);
++        if (_peer == -1) {
+             THROW_ERR(SPICEC_ERROR_CODE_CONNECT_FAILED, "failed to connect: %s (%d)",
+                       sock_err_message(err), err);
+         }
+diff --git a/client/red_peer.h b/client/red_peer.h
+index 6a80f8c..86e481a 100644
+--- a/client/red_peer.h
++++ b/client/red_peer.h
+@@ -121,8 +121,6 @@ public:
+     uint32_t recive(uint8_t* buf, uint32_t size);
+     uint32_t send(uint8_t* buf, uint32_t size);
+
+-    static uint32_t host_by_name(const char *host);
+-
+ protected:
+     virtual void on_event() {}
+     virtual int get_socket() { return _peer;}
+-- 
+1.6.6.1
+

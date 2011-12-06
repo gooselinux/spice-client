@@ -1,0 +1,69 @@
+From 78353dd51937136ac13232f6fac2ee0128244ac1 Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Wed, 31 Mar 2010 14:52:06 +0300
+Subject: [PATCH] client: x11: fix a crash caused by a call to a destroyed window. #578458
+
+Happens when a focused window is destroyed without a focus out event,
+and a focus-in event occurs on another window.
+---
+ client/x11/red_window.cpp |   12 +++++++++---
+ client/x11/red_window_p.h |    2 +-
+ 2 files changed, 10 insertions(+), 4 deletions(-)
+
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index 6b4148b..77c27ee 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -1010,11 +1010,17 @@ RedWindow_p::RedWindow_p()
+ {
+ }
+
+-void RedWindow_p::destroy(PixelsSource_p& pix_source)
++void RedWindow_p::destroy(RedWindow& red_window, PixelsSource_p& pix_source)
+ {
+     if (_win == None) {
+         return;
+     }
++
++    if (focus_window == &red_window) {
++        focus_window = NULL;
++        red_window.on_focus_out();
++    }
++
+     XPlatform::cleare_win_proc(_win);
+     XSelectInput(x_display, _win, 0);
+     XSync(x_display, False);
+@@ -1122,7 +1128,7 @@ void RedWindow_p::migrate(RedWindow& red_window, PixelsSource_p& pix_source, int
+     }
+     XTextProperty text_pro;
+     bool valid_title = XGetWMName(x_display, _win, &text_pro) && text_pro.value;
+-    destroy(pix_source);
++    destroy(red_window, pix_source);
+     create(red_window, pix_source, _show_pos.x, _show_pos.y, attrib.width, attrib.height,
+            to_screen);
+     if (valid_title) {
+@@ -1186,7 +1192,7 @@ RedWindow::RedWindow(RedWindow::Listener& listener, int screen)
+
+ RedWindow::~RedWindow()
+ {
+-    destroy(*(PixelsSource_p*)get_opaque());
++    destroy(*this, *(PixelsSource_p*)get_opaque());
+     if (_local_cursor) {
+         _local_cursor->unref();
+     }
+diff --git a/client/x11/red_window_p.h b/client/x11/red_window_p.h
+index ab9ce04..06440f9 100644
+--- a/client/x11/red_window_p.h
++++ b/client/x11/red_window_p.h
+@@ -36,7 +36,7 @@ public:
+     void migrate(RedWindow& red_window, PixelsSource_p& pix_source, int dest_screen);
+     void create(RedWindow& red_window, PixelsSource_p& pix_source, int x, int y,
+                 unsigned int width, unsigned int height, int in_screen);
+-    void destroy(PixelsSource_p& pix_source);
++    void destroy(RedWindow& red_window, PixelsSource_p& pix_source);
+     void set_minmax(PixelsSource_p& pix_source, int width, int height);
+     void wait_for_reparent();
+     void wait_for_map();
+-- 
+1.6.6.1
+

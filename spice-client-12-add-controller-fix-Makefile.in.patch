@@ -1,0 +1,79 @@
+From 33f119f6cbe5d8c370207465c7a5ce6de28194fa Mon Sep 17 00:00:00 2001
+From: Uri Lublin <uril@redhat.com>
+Date: Wed, 24 Mar 2010 05:29:16 +0200
+Subject: [PATCH 4/4] add controller - fix Makefile.in
+
+---
+ client/Makefile.in     |    3 +++
+ client/x11/Makefile.in |   20 +++++++++++++++++++-
+ 2 files changed, 22 insertions(+), 1 deletions(-)
+
+diff --git a/client/Makefile.in b/client/Makefile.in
+index 5c85df7..91ed5ef 100644
+--- a/client/Makefile.in
++++ b/client/Makefile.in
+@@ -255,6 +255,9 @@ RED_COMMON_SRCS = \
+ 	cmd_line_parser.cpp		\
+ 	cmd_line_parser.h		\
+ 	common.h			\
++	controller.cpp			\
++	controller.h			\
++	controller_prot.h		\
+ 	cursor_channel.cpp		\
+ 	cursor_channel.h		\
+ 	cursor.cpp			\
+diff --git a/client/x11/Makefile.in b/client/x11/Makefile.in
+index 7347d3b..9e1caaa 100644
+--- a/client/x11/Makefile.in
++++ b/client/x11/Makefile.in
+@@ -54,7 +54,7 @@ am__objects_1 =
+ am__objects_2 = application.$(OBJEXT) cairo_canvas.$(OBJEXT) \
+ 	canvas.$(OBJEXT) canvas_utils.$(OBJEXT) \
+ 	red_cairo_canvas.$(OBJEXT) cmd_line_parser.$(OBJEXT) \
+-	cursor_channel.$(OBJEXT) cursor.$(OBJEXT) \
++	controller.$(OBJEXT) cursor_channel.$(OBJEXT) cursor.$(OBJEXT) \
+ 	display_channel.$(OBJEXT) foreign_menu.$(OBJEXT) \
+ 	red_gl_canvas.$(OBJEXT) gl_canvas.$(OBJEXT) glc.$(OBJEXT) \
+ 	glz_decoder.$(OBJEXT) glz_decoder_window.$(OBJEXT) \
+@@ -310,6 +310,9 @@ RED_COMMON_SRCS = \
+ 	$(CLIENT_DIR)/cmd_line_parser.cpp		\
+ 	$(CLIENT_DIR)/cmd_line_parser.h			\
+ 	$(CLIENT_DIR)/common.h				\
++	$(CLIENT_DIR)/controller.cpp			\
++	$(CLIENT_DIR)/controller.h			\
++	$(CLIENT_DIR)/controller_prot.h			\
+ 	$(CLIENT_DIR)/cursor_channel.cpp		\
+ 	$(CLIENT_DIR)/cursor_channel.h			\
+ 	$(CLIENT_DIR)/cursor.cpp			\
+@@ -506,6 +509,7 @@ distclean-compile:
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/canvas.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/canvas_utils.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cmd_line_parser.Po@am__quote@
++@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/controller.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cursor.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cursor_channel.Po@am__quote@
+ @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/display_channel.Po@am__quote@
+@@ -648,6 +652,20 @@ cmd_line_parser.obj: $(CLIENT_DIR)/cmd_line_parser.cpp
+ @AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+ @am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o cmd_line_parser.obj `if test -f '$(CLIENT_DIR)/cmd_line_parser.cpp'; then $(CYGPATH_W) '$(CLIENT_DIR)/cmd_line_parser.cpp'; else $(CYGPATH_W) '$(srcdir)/$(CLIENT_DIR)/cmd_line_parser.cpp'; fi`
+
++controller.o: $(CLIENT_DIR)/controller.cpp
++@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT controller.o -MD -MP -MF $(DEPDIR)/controller.Tpo -c -o controller.o `test -f '$(CLIENT_DIR)/controller.cpp' || echo '$(srcdir)/'`$(CLIENT_DIR)/controller.cpp
++@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/controller.Tpo $(DEPDIR)/controller.Po
++@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='$(CLIENT_DIR)/controller.cpp' object='controller.o' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o controller.o `test -f '$(CLIENT_DIR)/controller.cpp' || echo '$(srcdir)/'`$(CLIENT_DIR)/controller.cpp
++
++controller.obj: $(CLIENT_DIR)/controller.cpp
++@am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT controller.obj -MD -MP -MF $(DEPDIR)/controller.Tpo -c -o controller.obj `if test -f '$(CLIENT_DIR)/controller.cpp'; then $(CYGPATH_W) '$(CLIENT_DIR)/controller.cpp'; else $(CYGPATH_W) '$(srcdir)/$(CLIENT_DIR)/controller.cpp'; fi`
++@am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/controller.Tpo $(DEPDIR)/controller.Po
++@AMDEP_TRUE@@am__fastdepCXX_FALSE@	source='$(CLIENT_DIR)/controller.cpp' object='controller.obj' libtool=no @AMDEPBACKSLASH@
++@AMDEP_TRUE@@am__fastdepCXX_FALSE@	DEPDIR=$(DEPDIR) $(CXXDEPMODE) $(depcomp) @AMDEPBACKSLASH@
++@am__fastdepCXX_FALSE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -c -o controller.obj `if test -f '$(CLIENT_DIR)/controller.cpp'; then $(CYGPATH_W) '$(CLIENT_DIR)/controller.cpp'; else $(CYGPATH_W) '$(srcdir)/$(CLIENT_DIR)/controller.cpp'; fi`
++
+ cursor_channel.o: $(CLIENT_DIR)/cursor_channel.cpp
+ @am__fastdepCXX_TRUE@	$(CXX) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CXXFLAGS) $(CXXFLAGS) -MT cursor_channel.o -MD -MP -MF $(DEPDIR)/cursor_channel.Tpo -c -o cursor_channel.o `test -f '$(CLIENT_DIR)/cursor_channel.cpp' || echo '$(srcdir)/'`$(CLIENT_DIR)/cursor_channel.cpp
+ @am__fastdepCXX_TRUE@	$(am__mv) $(DEPDIR)/cursor_channel.Tpo $(DEPDIR)/cursor_channel.Po
+-- 
+1.6.6.1
+

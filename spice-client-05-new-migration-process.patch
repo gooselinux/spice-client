@@ -1,0 +1,262 @@
+From a6f859487bcf4b52a618c54f89f88860d0b75e28 Mon Sep 17 00:00:00 2001
+From: Yonit Halperin <yhalperi@redhat.com>
+Date: Wed, 17 Mar 2010 18:43:41 +0200
+Subject: [RHEL-6 spice v2] new migration process #576031
+
+- the server acquires the target info from a dedicated Qemu command
+- when migration ends, the client receieves a new message RED_MIGRATE_SWITCH_HOST
+- client then disconnects from the source and connects to the target. The connection
+  to the target is entirely new.
+---
+ client/application.cpp |   64 +++++++++++++++++++-
+ client/application.h   |   22 +++++++
+ client/red_client.cpp  |   20 ++++++-
+ client/red_client.h    |    1 +
+ 7 files changed, 281 insertions(+), 6 deletions(-)
+
+diff --git a/client/application.cpp b/client/application.cpp
+index 8a010e4..094fa93 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -51,6 +51,8 @@
+ 
+ #define CA_FILE_NAME "spice_truststore.pem"
+ 
++#define SWITCH_HOST_TIMEOUT 150
++
+ #ifdef CAIRO_CANVAS_CACH_IS_SHARED
+ mutex_t cairo_surface_user_data_mutex;
+ #endif
+@@ -65,16 +67,26 @@ void ConnectedEvent::response(AbstractProcessLoop& events_loop)
+ void DisconnectedEvent::response(AbstractProcessLoop& events_loop)
+ {
+     Application* app = static_cast<Application*>(events_loop.get_owner());
++
++    if (app->_during_host_switch) {
++        app->_client.connect();
++        app->activate_interval_timer(*app->_switch_host_timer, SWITCH_HOST_TIMEOUT);
++        // todo: add indication for migration
++        app->show_splash(0);
++    } else {
+ #ifdef RED_DEBUG
+-    app->show_splash(0);
++        app->show_splash(0);
+ #else
+-    app->do_quit(SPICEC_ERROR_CODE_SUCCESS);
++        app->do_quit(SPICEC_ERROR_CODE_SUCCESS);
+ #endif
++    }
+ }
+ 
+ void ConnectionErrorEvent::response(AbstractProcessLoop& events_loop)
+ {
+     Application* app = static_cast<Application*>(events_loop.get_owner());
++
++    app->_during_host_switch = false;
+ #ifdef RED_DEBUG
+     app->show_splash(0);
+ #else
+@@ -96,6 +108,32 @@ void MonitorsQuery::do_response(AbstractProcessLoop& events_loop)
+     }
+ }
+ 
++SwitchHostEvent::SwitchHostEvent(const char* host, int port, int sport, const char* cert_subject)
++{
++    _host = host;
++    _port = port;
++    _sport = sport;
++    if (cert_subject) {
++        _cert_subject = cert_subject;
++    }
++}
++
++void SwitchHostTimer::response(AbstractProcessLoop& events_loop) {
++    Application* app = (Application*)events_loop.get_owner();
++
++    if (app->_during_host_switch) {
++        app->do_connect();
++    } else {
++        app->deactivate_interval_timer(this);
++    }
++}
++
++void SwitchHostEvent::response(AbstractProcessLoop& events_loop)
++{
++    Application* app = static_cast<Application*>(events_loop.get_owner());
++    app->switch_host(_host, _port, _sport, _cert_subject);
++}
++
+ class GUILayer: public ScreenLayer {
+ public:
+     GUILayer();
+@@ -279,6 +317,7 @@ Application::Application()
+     , _title (L"SPICEc:%d")
+     , _splash_mode (true)
+     , _sys_key_intercept_mode (false)
++    , _during_host_switch(false)
+ {
+     DBG(0, "");
+     Platform::set_process_loop(*this);
+@@ -327,6 +366,8 @@ Application::Application()
+     _sticky_info.key_down = false;
+     _sticky_info.key  = REDKEY_INVALID;
+     _sticky_info.timer.reset(new StickyKeyTimer());
++
++    _switch_host_timer.reset(new SwitchHostTimer());
+ }
+ 
+ Application::~Application()
+@@ -392,6 +433,21 @@ void Application::connect()
+     _client.connect();
+ }
+ 
++void Application::switch_host(const std::string& host, int port, int sport,
++                              const std::string& cert_subject)
++{
++    LOG_INFO("host=%s port=%d sport=%d", host.c_str(), port, sport);
++    _during_host_switch = true;
++    do_disconnect();
++    _client.set_target(host.c_str(), port, sport);
++
++    if (!cert_subject.empty()) {
++        set_host_cert_subject(cert_subject.c_str(), "spicec");
++    }
++
++    _client.connect();
++ }
++
+ int Application::run()
+ {
+        _client.connect();
+@@ -701,6 +757,10 @@ void Application::unpress_all()
+ 
+ void Application::on_connected()
+ {
++    if (_during_host_switch) {
++        _during_host_switch = false;
++        deactivate_interval_timer(*_switch_host_timer);
++    }
+ }
+ 
+ void Application::on_disconnecting()
+diff --git a/client/application.h b/client/application.h
+index e924ce1..213308f 100644
+--- a/client/application.h
++++ b/client/application.h
+@@ -72,6 +72,18 @@ private:
+     std::vector<MonitorInfo> _monitors;
+ };
+ 
++class SwitchHostEvent: public Event {
++public:
++    SwitchHostEvent(const char* host, int port, int sport, const char* cert_subject);
++    virtual void response(AbstractProcessLoop& events_loop);
++
++private:
++    std::string _host;
++    int _port;
++    int _sport;
++    std::string _cert_subject;
++};
++
+ struct KeyInfo {
+     uint32_t _make;
+     uint32_t _break;
+@@ -109,6 +121,11 @@ typedef struct StickyInfo {
+     AutoRef<StickyKeyTimer> timer;
+ } StickyInfo;
+ 
++class SwitchHostTimer: public Timer {
++public:
++    virtual void response(AbstractProcessLoop& events_loop);
++};
++
+ class Application : public ProcessLoop,
+                     public Platform::EventListener,
+                     public Platform::DisplayModeListner,
+@@ -154,6 +171,8 @@ public:
+     void show();
+     void external_show();
+     void connect();
++    void switch_host(const std::string& host, int port, int sport, const std::string& cert_subject);
++
+     const PeerConnectionOptMap& get_con_opt_map() {return _peer_con_opt;}
+     const RedPeer::HostAuthOptions& get_host_auth_opt() { return _host_auth_opt;}
+     const std::string& get_connection_ciphers() { return _con_ciphers;}
+@@ -225,6 +244,7 @@ private:
+     friend class MonitorsQuery;
+     friend class AutoAbort;
+     friend class StickyKeyTimer;
++    friend class SwitchHostTimer;
+ 
+ private:
+     RedClient _client;
+@@ -252,6 +272,8 @@ private:
+     StickyInfo _sticky_info;
+     std::vector<int> _canvas_types;
+     AutoRef<Menu> _app_menu;
++    bool _during_host_switch;
++    AutoRef<SwitchHostTimer> _switch_host_timer;
+ };
+ 
+ #endif
+diff --git a/client/red_client.cpp b/client/red_client.cpp
+index 9079326..9fa2b1a 100644
+--- a/client/red_client.cpp
++++ b/client/red_client.cpp
+@@ -288,6 +288,8 @@ RedClient::RedClient(Application& application)
+     message_loop->set_handler(RED_MIGRATE_BEGIN, &RedClient::handle_migrate_begin,
+                               sizeof(RedMigrationBegin));
+     message_loop->set_handler(RED_MIGRATE_CANCEL, &RedClient::handle_migrate_cancel, 0);
++    message_loop->set_handler(RED_MIGRATE_SWITCH_HOST, &RedClient::handle_migrate_switch_host,
++                              sizeof(RedMigrationSwitchHost));
+     message_loop->set_handler(RED_INIT, &RedClient::handle_init, sizeof(RedInit));
+     message_loop->set_handler(RED_CHANNELS_LIST, &RedClient::handle_channels,
+                               sizeof(RedChannels));
+@@ -392,7 +394,8 @@ RedPeer::ConnectionOptions::Type RedClient::get_connection_options(uint32_t chan
+ 
+ void RedClient::connect()
+ {
+-    //todo wait for disconnect state
++    //todo wait for disconnect state (but notifce that the main process loop
++    // must run when waiting for aborts)
+     if (_connection_id || !abort_channels()) {
+         return;
+     }
+@@ -791,6 +794,21 @@ void RedClient::handle_agent_tokens(RedPeer::InMessage* message)
+     _agent_tokens += token->num_tokens;
+ }
+ 
++void RedClient::handle_migrate_switch_host(RedPeer::InMessage* message)
++{
++    RedMigrationSwitchHost* migrate = (RedMigrationSwitchHost*)message->data();
++    char* host = ((char*)migrate) + migrate->host_offset;
++    char* subject = NULL;
++    if (migrate->cert_subject_size) {
++        subject = ((char*)migrate)+ migrate->cert_subject_offset;
++    }
++    AutoRef<SwitchHostEvent> switch_event(new SwitchHostEvent(host,
++                                                              migrate->port,
++                                                              migrate->sport,
++                                                              subject));
++    push_event(*switch_event);
++}
++
+ void RedClient::migrate_channel(RedChannel& channel)
+ {
+     DBG(0, "channel type %u id %u", channel.get_type(), channel.get_id());
+diff --git a/client/red_client.h b/client/red_client.h
+index b7edadb..2937996 100644
+--- a/client/red_client.h
++++ b/client/red_client.h
+@@ -187,6 +187,7 @@ private:
+     void handle_agent_disconnected(RedPeer::InMessage* message);
+     void handle_agent_data(RedPeer::InMessage* message);
+     void handle_agent_tokens(RedPeer::InMessage* message);
++    void handle_migrate_switch_host(RedPeer::InMessage* message);
+ 
+     void on_agent_reply(VDAgentReply* reply);
+ 
+-- 
+1.6.6.1
+

@@ -1,0 +1,26 @@
+From 9a0acf3e1e21f40a69d97ebebe92a2ee04ea20a1 Mon Sep 17 00:00:00 2001
+From: Uri Lublin <uril@redhat.com>
+Date: Mon, 21 Jun 2010 03:39:05 -0400
+Subject: [PATCH] client: x11: call getsockname() with initizlized sock_len #604701
+
+This solves a stack smashing issue.
+---
+ client/x11/platform.cpp |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/client/x11/platform.cpp b/client/x11/platform.cpp
+index bceae05..80bbdb4 100644
+--- a/client/x11/platform.cpp
++++ b/client/x11/platform.cpp
+@@ -2131,7 +2131,7 @@ void Platform::init()
+     int err, ev;
+     int threads_enable;
+     int connection_fd;
+-    socklen_t sock_len;
++    socklen_t sock_len = sizeof(struct sockaddr);
+     struct sockaddr sock_addr;
+
+     DBG(0, "");
+-- 
+1.6.6.1
+
