@@ -1,0 +1,57 @@
+From 79fffbf95d96b0eeb740fdfb9cca285fab8735c6 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 20 Oct 2010 21:52:49 +0200
+Subject: [PATCH spice 1/3] spicec-x11: Change source of controller socket name, fixing CVE-2010-2792
+
+The socket name used to communicate between the xpi browser plugin and the
+spicec was predictable allowing a non priviliged user on the same system
+to create the socket before spicec does and thus intercept the messages from
+the xpi to the client, including login credentials. This security vulnerability
+has been registred with mitre as CVE-2010-2792:
+http://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2010-2792
+
+This patch changes the controller code to instead read the socket name
+from an environment variable which gets set by the xpi before executing
+the spicec, making the socketname private between the client and the xpi.
+
+Note that this means that the controller will only work with an xpi which
+has matching changes, the changes are present in the latest version of the
+xpi as available as update for / with RHEL-5.5 and RHEL-6.0 .
+---
+ client/controller.cpp |   12 ++++++++----
+ 1 files changed, 8 insertions(+), 4 deletions(-)
+
+diff --git a/client/controller.cpp b/client/controller.cpp
+index b293771..032afae 100644
+--- a/client/controller.cpp
++++ b/client/controller.cpp
+@@ -28,10 +28,6 @@
+ 
+ #ifdef WIN32
+ #define PIPE_NAME "SpiceController-%lu"
+-#elif defined(__i386__)
+-#define PIPE_NAME "/tmp/SpiceController-%llu.uds"
+-#else
+-#define PIPE_NAME "/tmp/SpiceController-%lu.uds"
+ #endif
+ 
+ Controller::Controller(ControllerInterface *handler)
+@@ -42,7 +38,15 @@ Controller::Controller(ControllerInterface *handler)
+     char pipe_name[PIPE_NAME_MAX_LEN];
+ 
+     ASSERT(_handler);
++#ifdef WIN32
+     snprintf(pipe_name, PIPE_NAME_MAX_LEN, PIPE_NAME, Platform::get_process_id());
++#else
++    char *p_socket = getenv("SPICE_XPI_SOCKET");
++    if (!p_socket) {
++        LOG_ERROR("Failed to get a controller connection (SPICE_XPI_SOCKET)");
++    }
++    strncpy(pipe_name, p_socket, sizeof(pipe_name));
++#endif
+     LOG_INFO("Creating a controller connection %s", pipe_name);
+     _pipe = NamedPipe::create(pipe_name, *this);
+     if (!_pipe) {
+-- 
+1.7.3.1
+

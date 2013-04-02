@@ -1,0 +1,208 @@
+From fa2e125ec4535b4a56a33aed76e3a0f9ce75eca0 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Wed, 20 Oct 2010 17:28:07 +0200
+Subject: [PATCH spice 2/3] client: Interpret the title control message as utf8 instead of unicode16
+
+The activex browser plugin is sending unicode16 text, where as the
+xpi one is sending utf8 text. After discussing this on irc we've decided
+that utf8 is what we want to use. So the client (this patch), and the
+activex will be changed to expect resp. send utf8 text as the title.
+---
+ client/application.cpp        |    4 ++--
+ client/application.h          |    4 ++--
+ client/controller.cpp         |    8 ++------
+ client/controller.h           |    2 +-
+ client/red_window.h           |    2 +-
+ client/screen.cpp             |    6 +++---
+ client/screen.h               |    6 +++---
+ client/windows/red_window.cpp |    2 +-
+ client/x11/red_window.cpp     |    8 ++++----
+ 9 files changed, 19 insertions(+), 23 deletions(-)
+
+diff --git a/client/application.cpp b/client/application.cpp
+index 212b20e..d5b24a7 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -355,7 +355,7 @@ Application::Application()
+     , _key_handler (&default_key_handler)
+     , _mouse_handler (&default_mouse_handler)
+     , _monitors (NULL)
+-    , _title (L"SPICEc:%d")
++    , _title ("SPICEc:%d")
+     , _sys_key_intercept_mode (false)
+ 	, _enable_controller (false)
+ #ifdef USE_GUI
+@@ -1603,7 +1603,7 @@ uint32_t Application::get_mouse_mode()
+     return _client.get_mouse_mode();
+ }
+ 
+-void Application::set_title(const std::wstring& title)
++void Application::set_title(const std::string& title)
+ {
+     _title = title;
+ 
+diff --git a/client/application.h b/client/application.h
+index c01e08b..19c68a5 100644
+--- a/client/application.h
++++ b/client/application.h
+@@ -218,7 +218,7 @@ public:
+     void exit_full_screen();
+     bool toggle_full_screen();
+     void minimize();
+-    void set_title(const std::wstring& title);
++    void set_title(const std::string& title);
+     void hide();
+     void show();
+     void external_show();
+@@ -367,7 +367,7 @@ private:
+     KeyHandlersStack _key_handlers;
+     MouseHandler* _mouse_handler;
+     const MonitorsList* _monitors;
+-    std::wstring _title;
++    std::string _title;
+     bool _sys_key_intercept_mode;
+     StickyInfo _sticky_info;
+     std::vector<int> _canvas_types;
+diff --git a/client/controller.cpp b/client/controller.cpp
+index 032afae..6d1272c 100644
+--- a/client/controller.cpp
++++ b/client/controller.cpp
+@@ -308,12 +308,8 @@ bool ControllerConnection::handle_message(ControllerMsg *hdr)
+         _handler->set_auto_display_res(!!(value & CONTROLLER_AUTO_DISPLAY_RES));
+         break;
+     case CONTROLLER_SET_TITLE: {
+-        std::wstring str;
+-#ifdef WIN32
+-        wstring_printf(str, L"%s", data);
+-#else
+-        wstring_printf(str, L"%S", data);
+-#endif
++        std::string str;
++        string_printf(str, "%s", data);
+         _handler->set_title(str);
+         break;
+     }
+diff --git a/client/controller.h b/client/controller.h
+index 89b2c23..924f351 100644
+--- a/client/controller.h
++++ b/client/controller.h
+@@ -33,7 +33,7 @@ public:
+ 
+     virtual bool connect(const std::string& host, int port, int sport,
+                          const std::string& password) = 0;
+-    virtual void set_title(const std::wstring& title) = 0;
++    virtual void set_title(const std::string& title) = 0;
+     virtual void set_auto_display_res(bool auto_display_res) = 0;
+     virtual void show_me(bool full_screen) = 0;
+     virtual void hide_me() = 0;
+diff --git a/client/red_window.h b/client/red_window.h
+index 97f3b79..632564d 100644
+--- a/client/red_window.h
++++ b/client/red_window.h
+@@ -48,7 +48,7 @@ public:
+     void hide();
+     void minimize();
+     void activate();
+-    void set_title(std::wstring& title);
++    void set_title(std::string& title);
+     void set_icon(Icon *icon);
+     virtual RedDrawable::Format get_format();
+ 
+diff --git a/client/screen.cpp b/client/screen.cpp
+index 7c4e1e3..575ab5d 100644
+--- a/client/screen.cpp
++++ b/client/screen.cpp
+@@ -71,7 +71,7 @@ void UpdateTimer::response(AbstractProcessLoop& events_loop)
+     _screen->periodic_update();
+ }
+ 
+-RedScreen::RedScreen(Application& owner, int id, const std::wstring& name, int width, int height)
++RedScreen::RedScreen(Application& owner, int id, const std::string& name, int width, int height)
+     : _owner (owner)
+     , _id (id)
+     , _refs (1)
+@@ -216,10 +216,10 @@ void RedScreen::unlock_size()
+     _owner.on_screen_unlocked(*this);
+ }
+ 
+-void RedScreen::set_name(const std::wstring& name)
++void RedScreen::set_name(const std::string& name)
+ {
+     if (!name.empty()) {
+-        wstring_printf(_name, name.c_str(), _id);
++        string_printf(_name, name.c_str(), _id);
+     }
+     _window.set_title(_name);
+ }
+diff --git a/client/screen.h b/client/screen.h
+index dfef989..d81ebf8 100644
+--- a/client/screen.h
++++ b/client/screen.h
+@@ -54,7 +54,7 @@ private:
+ 
+ class RedScreen: public RedWindow::Listener {
+ public:
+-    RedScreen(Application& owner, int id, const std::wstring& name, int width, int height);
++    RedScreen(Application& owner, int id, const std::string& name, int width, int height);
+ 
+     RedScreen* ref();
+     void unref();
+@@ -63,7 +63,7 @@ public:
+     void detach_layer(ScreenLayer& layer);
+     void on_layer_changed(ScreenLayer& layer);
+     void resize(int width, int height);
+-    void set_name(const std::wstring& name);
++    void set_name(const std::string& name);
+     uint64_t invalidate(const SpiceRect& rect, bool urgent);
+     void invalidate(const QRegion &region);
+     void capture_mouse();
+@@ -163,7 +163,7 @@ private:
+     Application& _owner;
+     int _id;
+     AtomicCount _refs;
+-    std::wstring _name;
++    std::string _name;
+     RedWindow _window;
+     std::vector<ScreenLayer*> _layes;
+     QRegion _dirty_region;
+diff --git a/client/windows/red_window.cpp b/client/windows/red_window.cpp
+index bab2d97..0413945 100644
+--- a/client/windows/red_window.cpp
++++ b/client/windows/red_window.cpp
+@@ -446,7 +446,7 @@ RedWindow::~RedWindow()
+     }
+ }
+ 
+-void RedWindow::set_title(std::wstring& title)
++void RedWindow::set_title(std::string& title)
+ {
+     SetWindowText(_win, title.c_str());
+ }
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index 7cdf684..416f6c7 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -1331,16 +1331,16 @@ RedWindow::~RedWindow()
+     }
+ }
+ 
+-void RedWindow::set_title(std::wstring& title)
++void RedWindow::set_title(std::string& title)
+ {
+     XTextProperty text_prop;
+-    wchar_t *name = const_cast<wchar_t *>(title.c_str());
++    char *name = const_cast<char *>(title.c_str());
+     int r;
+     if (_win) {
+         XLockDisplay(x_display);
+-        r = XwcTextListToTextProperty(x_display, &name, 1, XStringStyle, &text_prop);
++        r = Xutf8TextListToTextProperty(x_display, &name, 1, XUTF8StringStyle, &text_prop);
+         XUnlockDisplay(x_display);
+-        if (r >= 0) {
++        if (r == Success) {
+             XSetWMName(x_display, _win, &text_prop);
+             XFree(text_prop.value);
+         } else {
+-- 
+1.7.3.1
+

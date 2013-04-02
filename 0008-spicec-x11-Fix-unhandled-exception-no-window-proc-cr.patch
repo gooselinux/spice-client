@@ -1,0 +1,43 @@
+From c8a034f2858f247d6a00ec1ad47de491b7e99575 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Tue, 23 Nov 2010 15:32:15 +0100
+Subject: [PATCH spice 3/4] spicec-x11: Fix unhandled exception: no window proc crash (rhbz#655836)
+
+When XIM + ibus is in use XIM creates an invisible window for its own
+purposes, we sometimes get a _GTK_LOAD_ICONTHEMES ClientMessage event on
+this window. Since this window was not explicitly created by spicec, it
+does not have a Window Context (with the event handling function for the
+window in question) set. This would cause spicec to throw an unhandled
+exception and exit.
+
+This patch replaces the exception throwing with silently ignoring
+ClientMessage events on Windows without a Context and logging a warning
+for other event types.
+---
+ client/x11/platform.cpp |   10 +++++++++-
+ 1 files changed, 9 insertions(+), 1 deletions(-)
+
+diff --git a/client/x11/platform.cpp b/client/x11/platform.cpp
+index 2009817..334a74f 100644
+--- a/client/x11/platform.cpp
++++ b/client/x11/platform.cpp
+@@ -295,7 +295,15 @@ void XEventHandler::on_event()
+ 	}
+ 
+         if (XFindContext(&_x_display, event.xany.window, _win_proc_context, &proc_pointer)) {
+-            THROW("no window proc");
++            /* When XIM + ibus is in use XIM creates an invisible window for
++               its own purposes, we sometimes get a _GTK_LOAD_ICONTHEMES
++               ClientMessage event on this window -> skip logging. */
++            if (event.type != ClientMessage) {
++                LOG_WARN(
++                    "Event on window without a win proc, type: %d, window: %u",
++                    event.type, (unsigned int)event.xany.window);
++            }
++            continue;
+         }
+         XUnlockDisplay(x_display);
+         ((XPlatform::win_proc_t)proc_pointer)(event);
+-- 
+1.7.3.2
+

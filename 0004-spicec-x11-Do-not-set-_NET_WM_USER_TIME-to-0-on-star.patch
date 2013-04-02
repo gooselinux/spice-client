@@ -1,0 +1,69 @@
+From 99a74a06744bac4e45e66ce6512f52c1de5febb2 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Thu, 21 Oct 2010 16:22:06 +0200
+Subject: [PATCH spice 4/4] spicec-x11: Do not set _NET_WM_USER_TIME to 0 on startup
+
+Setting _NET_WM_USER_TIME to 0 means we do not want focus, not good.
+---
+ client/x11/red_window.cpp |   10 ++++++----
+ client/x11/red_window_p.h |    2 +-
+ 2 files changed, 7 insertions(+), 5 deletions(-)
+
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index 416f6c7..c3ee1b0 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -801,7 +801,7 @@ void RedWindow_p::win_proc(XEvent& event)
+     }
+     case KeyPress:
+         red_window->handle_key_press_event(*red_window, &event.xkey);
+-        red_window->last_event_time = event.xkey.time;
++        red_window->_last_event_time = event.xkey.time;
+         XChangeProperty(x_display, red_window->_win, wm_user_time,
+                         XA_CARDINAL, 32, PropModeReplace,
+                         (unsigned char *)&event.xkey.time, 1);
+@@ -833,7 +833,7 @@ void RedWindow_p::win_proc(XEvent& event)
+             break;
+         }
+         red_window->get_listener().on_mouse_button_press(button, state);
+-        red_window->last_event_time = event.xkey.time;
++        red_window->_last_event_time = event.xkey.time;
+         XChangeProperty(x_display, red_window->_win, wm_user_time,
+                         XA_CARDINAL, 32, PropModeReplace,
+                         (unsigned char *)&event.xbutton.time, 1);
+@@ -1119,6 +1119,7 @@ RedWindow_p::RedWindow_p()
+     , _ignore_pointer (false)
+     ,_width (200)
+     ,_height (200)
++    ,_last_event_time (0)
+ {
+ }
+ 
+@@ -1534,8 +1535,9 @@ void RedWindow::show(int screen_id)
+         XDeleteProperty(x_display, _win, wm_state);
+         wait_parent = true;
+     }
+-    XChangeProperty(x_display, _win, wm_user_time, XA_CARDINAL, 32,
+-                    PropModeReplace, (unsigned char *)&last_event_time, 1);
++    if (_last_event_time != 0)
++        XChangeProperty(x_display, _win, wm_user_time, XA_CARDINAL, 32,
++                        PropModeReplace, (unsigned char *)&_last_event_time, 1);
+     XMapWindow(x_display, _win);
+     move_to_current_desktop();
+     _expect_parent = wait_parent;
+diff --git a/client/x11/red_window_p.h b/client/x11/red_window_p.h
+index 4ad5451..777a855 100644
+--- a/client/x11/red_window_p.h
++++ b/client/x11/red_window_p.h
+@@ -82,7 +82,7 @@ protected:
+     RedWindow *_red_window;
+     int _width;
+     int _height;
+-    Time last_event_time;
++    Time _last_event_time;
+ };
+ 
+ #endif
+-- 
+1.7.3.1
+

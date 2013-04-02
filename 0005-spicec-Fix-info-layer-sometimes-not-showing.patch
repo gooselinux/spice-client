@@ -1,0 +1,38 @@
+From e72a47afa83a860cad39a179018fdae5c6e09959 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Tue, 9 Nov 2010 11:24:59 +0100
+Subject: [PATCH spice 1/3] spicec: Fix info layer sometimes not showing
+
+Currently we are calling show_info_layer from hide_gui in application.cpp, but
+there are 2 cases where this does not happen:
+
+1) When compiled without gui support hide_gui is a complete nop, so we never
+   show the info layer when compiled without gui support
+2) When run with --controller we never show the gui, and hide_gui
+   checks if there is a gui to hide as the first thing and if not returns
+   resulting in show_info_layer not being called, and thus the info layer
+   not showing when launched from the xpi
+
+This patch fixes both by adding a call to show_info_layer from
+on_visibility_start note that on_visibility_start also calls hide_gui,
+so in some cases show_info_layer may be called twice, this is not a
+problem as show_info_layer is protected against this.
+---
+ client/application.cpp |    1 +
+ 1 files changed, 1 insertions(+), 0 deletions(-)
+
+diff --git a/client/application.cpp b/client/application.cpp
+index d5b24a7..7ef2c78 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -854,6 +854,7 @@ void Application::on_visibility_start(int screen_id)
+     }
+     set_state(VISIBILITY);
+     hide_gui();
++    show_info_layer();
+ }
+ 
+ void Application::on_disconnecting()
+-- 
+1.7.3.2
+

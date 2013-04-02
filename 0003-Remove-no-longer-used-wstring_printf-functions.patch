@@ -1,0 +1,98 @@
+From 4c81024ca2d6bff33df9b52d0600ef5146f6d86d Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Thu, 21 Oct 2010 13:17:23 +0200
+Subject: [PATCH spice 3/3] Remove no longer used wstring_printf functions
+
+---
+ client/utils.cpp                  |    8 --------
+ client/utils.h                    |    2 --
+ client/windows/platform_utils.cpp |   14 --------------
+ client/x11/platform_utils.cpp     |   18 ------------------
+ 4 files changed, 0 insertions(+), 42 deletions(-)
+
+diff --git a/client/utils.cpp b/client/utils.cpp
+index 9ce09d7..460f610 100644
+--- a/client/utils.cpp
++++ b/client/utils.cpp
+@@ -29,14 +29,6 @@ void string_printf(std::string& str, const char* format, ...)
+     va_end(ap);
+ }
+ 
+-void wstring_printf(std::wstring& str, const wchar_t* format, ...)
+-{
+-    va_list ap;
+-    va_start(ap, format);
+-    wstring_vprintf(str, format, ap);
+-    va_end(ap);
+-}
+-
+ int str_to_port(const char *str)
+ {
+     long port;
+diff --git a/client/utils.h b/client/utils.h
+index 33922a7..3b3cbb0 100644
+--- a/client/utils.h
++++ b/client/utils.h
+@@ -99,8 +99,6 @@ int str_to_port(const char *str);
+ 
+ void string_vprintf(std::string& str, const char* format, va_list ap);
+ void string_printf(std::string& str, const char *format, ...);
+-void wstring_vprintf(std::wstring& str, const wchar_t* format, va_list ap);
+-void wstring_printf(std::wstring& str, const wchar_t *format, ...);
+ 
+ template<class T>
+ class FreeObject {
+diff --git a/client/windows/platform_utils.cpp b/client/windows/platform_utils.cpp
+index 0270959..eb87468 100644
+--- a/client/windows/platform_utils.cpp
++++ b/client/windows/platform_utils.cpp
+@@ -35,20 +35,6 @@ void string_vprintf(std::string& str, const char* format, va_list ap)
+     }
+ }
+ 
+-void wstring_vprintf(std::wstring& str, const wchar_t* format, va_list ap)
+-{
+-    int buf_size = 256;
+-    for (;;) {
+-        AutoArray<wchar_t> buf(new wchar_t[buf_size]);
+-        int r = vswprintf(buf.get(), buf_size, format, ap);
+-        if (r != -1) {
+-            str = buf.get();
+-            return;
+-        }
+-        buf_size *= 2;
+-    }
+-}
+-
+ HDC create_compatible_dc()
+ {
+     HDC dc = CreateCompatibleDC(NULL);
+diff --git a/client/x11/platform_utils.cpp b/client/x11/platform_utils.cpp
+index a646a80..5ca68f4 100644
+--- a/client/x11/platform_utils.cpp
++++ b/client/x11/platform_utils.cpp
+@@ -28,21 +28,3 @@ void string_vprintf(std::string& str, const char* format, va_list ap)
+     vsnprintf(buf.get(), len, format, ap);
+     str = buf.get();
+ }
+-
+-void wstring_vprintf(std::wstring& str, const wchar_t* format, va_list ap)
+-{
+-    int buf_size = 256;
+-    for (;;) {
+-        AutoArray<wchar_t> buf(new wchar_t[buf_size]);
+-        va_list ap_test;
+-        va_copy(ap_test, ap);
+-        int r = vswprintf(buf.get(), buf_size, format, ap_test);
+-        va_end(ap_test);
+-        if (r != -1) {
+-            str = buf.get();
+-            return;
+-        }
+-        buf_size *= 2;
+-    }
+-}
+-
+-- 
+1.7.3.1
+

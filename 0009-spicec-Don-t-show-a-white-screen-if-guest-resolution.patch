@@ -1,0 +1,159 @@
+From 6437f11de2ceee2be932143c5f3779e232ec3415 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Tue, 23 Nov 2010 21:07:56 +0100
+Subject: [PATCH spice 4/4] spicec: Don't show a white screen if guest resolution does not fit fullscreen
+
+Currently when going / starting fullscreen if the guest resolution for one of
+the monitors is higher then that monitor on the client can handle, we show a
+white screen. Leaving the user stuck (unless they know the fullscreen key
+switch combi) with a white screen when starting the client fullscreen from
+the XPI.
+
+This patch changes the client to fall back to windowed mode in this case
+instead.
+---
+ client/application.cpp     |   30 ++++++++++++++++++++++++++++++
+ client/application.h       |    2 ++
+ client/display_channel.cpp |    2 +-
+ client/screen.h            |    2 +-
+ 4 files changed, 34 insertions(+), 2 deletions(-)
+
+diff --git a/client/application.cpp b/client/application.cpp
+index 4b22e1f..c380373 100644
+--- a/client/application.cpp
++++ b/client/application.cpp
+@@ -348,6 +348,7 @@ Application::Application()
+     , _active (false)
+     , _full_screen (false)
+     , _changing_screens (false)
++    , _out_of_sync (false)
+     , _exit_code (0)
+     , _active_screen (NULL)
+     , _num_keys_pressed (0)
+@@ -674,6 +675,12 @@ RedScreen* Application::get_screen(int id)
+                 prepare_monitors();
+                 position_screens();
+                 screen->show_full_screen();
++                if (screen->is_out_of_sync()) {
++                    _out_of_sync = true;
++                    /* If the client monitor cannot handle the guest resolution
++                       drop back to windowed mode */
++                    exit_full_screen();
++                }
+ 
+                 if (capture) {
+                     _main_screen->activate();
+@@ -1492,6 +1499,9 @@ void Application::show_full_screen()
+     for (int i = 0; i < (int)_screens.size(); i++) {
+         if (_screens[i]) {
+             _screens[i]->show_full_screen();
++            if (_screens[i]->is_out_of_sync()) {
++                _out_of_sync = true;
++            }
+         }
+     }
+ }
+@@ -1512,6 +1522,11 @@ void Application::enter_full_screen()
+     }
+     _changing_screens = false;
+     _full_screen = true;
++    /* If the client monitor cannot handle the guest resolution drop back
++       to windowed mode */
++    if (_out_of_sync) {
++        exit_full_screen();
++    }
+ }
+ 
+ void Application::restore_screens_size()
+@@ -1529,6 +1544,9 @@ void Application::exit_full_screen()
+     if (!_full_screen) {
+         return;
+     }
++    if (_out_of_sync) {
++        LOG_WARN("Falling back to windowed mode (guest resolution too large for client?)");
++    }
+     LOG_INFO("");
+     _changing_screens = true;
+     release_capture();
+@@ -1544,6 +1562,7 @@ void Application::exit_full_screen()
+         }
+     }
+     _full_screen = false;
++    _out_of_sync = false;
+     restore_screens_size();
+     show();
+     _main_screen->activate();
+@@ -1560,6 +1579,17 @@ bool Application::toggle_full_screen()
+     return _full_screen;
+ }
+ 
++void Application::resize_screen(RedScreen *screen, int width, int height)
++{
++    screen->resize(width, height);
++    if (screen->is_out_of_sync()) {
++        _out_of_sync = true;
++        /* If the client monitor cannot handle the guest resolution
++           drop back to windowed mode */
++        exit_full_screen();
++    }
++}
++
+ void Application::minimize()
+ {
+     for (int i = 0; i < (int)_screens.size(); i++) {
+diff --git a/client/application.h b/client/application.h
+index 0e761ec..5a5a488 100644
+--- a/client/application.h
++++ b/client/application.h
+@@ -217,6 +217,7 @@ public:
+     void enter_full_screen();
+     void exit_full_screen();
+     bool toggle_full_screen();
++    void resize_screen(RedScreen *screen, int width, int height);
+     void minimize();
+     void set_title(const std::string& title);
+     void hide();
+@@ -352,6 +353,7 @@ private:
+     bool _active;
+     bool _full_screen;
+     bool _changing_screens;
++    bool _out_of_sync;
+     int _exit_code;
+     RedScreen* _active_screen;
+     bool _keyboard_state[REDKEY_NUM_KEYS];
+diff --git a/client/display_channel.cpp b/client/display_channel.cpp
+index c371f4a..1d5ebf3 100644
+--- a/client/display_channel.cpp
++++ b/client/display_channel.cpp
+@@ -57,7 +57,7 @@ public:
+     {
+         Application* app = (Application*)events_loop.get_owner();
+         _channel.screen()->lock_size();
+-        _channel.screen()->resize(_width, _height);
++        app->resize_screen(_channel.screen(), _width, _height);
+         _channel.create_canvas(0, app->get_canvas_types(), _width, _height, _format);
+     }
+ 
+diff --git a/client/screen.h b/client/screen.h
+index d81ebf8..2b40d77 100644
+--- a/client/screen.h
++++ b/client/screen.h
+@@ -78,6 +78,7 @@ public:
+     void set_monitor(Monitor *monitor) { _monitor = monitor;}
+     Monitor* get_monitor() { return _monitor;}
+     RedWindow* get_window() { return &_window;}
++    bool is_out_of_sync() { return _out_of_sync;}
+     void set_cursor(LocalCursor* cursor);
+     void hide_cursor();
+     void exit_full_screen();
+@@ -118,7 +119,6 @@ private:
+     void notify_new_size();
+     void adjust_window_rect(int x, int y);
+     void save_position();
+-    bool is_out_of_sync() { return _out_of_sync;}
+     void __show_full_screen();
+ 
+     bool _invalidate(const SpiceRect& rect, bool urgent, uint64_t& update_mark);
+-- 
+1.7.3.2
+

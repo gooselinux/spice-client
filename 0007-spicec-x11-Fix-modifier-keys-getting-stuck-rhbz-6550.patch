@@ -1,0 +1,70 @@
+From 0e7a79ae11a905cee128c2429a7738fe43e30586 Mon Sep 17 00:00:00 2001
+From: Hans de Goede <hdegoede@redhat.com>
+Date: Mon, 22 Nov 2010 16:09:15 +0100
+Subject: [PATCH spice 2/4] spicec-x11: Fix modifier keys getting stuck (rhbz#655048)
+
+Currently modifier keys (ctrl, alt) can get stuck when using the x11 client.
+To reproduce under gnome:
+-focus the client window without causing it to grab the keyborad (click on
+ the title bar not the window)
+-press crlt + alt + right arrow to switch virtual desktop
+-press crlt + alt + left arrow to switch back
+-notice ctrl + alt are stuck pressed
+
+What is happening here is:
+-We get a focus out event, caused by the hotkey combi key grab, focus event
+ notify mode == NotifyGrab, and release all keys -> good
+-We get another focus out event, as we really loose the focus.
+ notify mode == NotifyWhileGrabbed, which we ignore as we already lost
+ focus before
+-We get a focus in event, as the focus is returning to us, but we don't
+ really have the focus yet, as the hotkey combi key grab is still active
+ (ie ctrl + alt are still pressed).
+ We now sync the vm's modifier key state with the current X-server state,
+ telling the vm ctrl + alt are pressed. Note we do this by directly reading
+ the X-server keyboard status, we are not getting any key press events from the
+ X-server -> bad
+-We get another focus in event, as we really get the focus back,
+ notify mode == NotifyUngrab. We ignore this one as already have gained the
+ focus before. If we were to sync the vm modifier state here, all would be
+ well we would no longer see the modifier keys pressed, or if we would we
+ would get a release event when they get released (testing has shown both).
+
+The solution here is to ignore the first focus in event, and do the modifier
+sync on the second focus in event, or more in general to ignore focus events
+where notify mode == NotifyWhileGrabbed.
+---
+ client/x11/red_window.cpp |   10 ++++++++++
+ 1 files changed, 10 insertions(+), 0 deletions(-)
+
+diff --git a/client/x11/red_window.cpp b/client/x11/red_window.cpp
+index c50e307..6e8cd58 100644
+--- a/client/x11/red_window.cpp
++++ b/client/x11/red_window.cpp
+@@ -866,6 +866,11 @@ void RedWindow_p::win_proc(XEvent& event)
+         break;
+     }
+     case FocusIn:
++        /* Ignore focus events caused by grabbed (hotkeys) */
++        if (event.xfocus.mode == NotifyWhileGrabbed) {
++            break;
++        }
++
+         if (event.xany.serial < focus_serial) {
+             DBG(0, "Ignored FocusIn win=%p (serial=%d, Last foucs serial=%d)",
+                    red_window,  event.xany.serial, focus_serial);
+@@ -886,6 +891,11 @@ void RedWindow_p::win_proc(XEvent& event)
+         }
+         break;
+     case FocusOut:
++        /* Ignore focus events caused by grabbed (hotkeys) */
++        if (event.xfocus.mode == NotifyWhileGrabbed) {
++            break;
++        }
++
+         if (event.xany.serial <= focus_serial) {
+             DBG(0, "Ignored FocusOut win=%p (serial=%d, Last foucs serial=%d)",
+                    red_window, event.xany.serial, focus_serial);
+-- 
+1.7.3.2
+

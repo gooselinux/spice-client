@@ -1,58 +1,35 @@
-
-%define tarname spice-client
-%define tarversion 0.4.2
-
-%define patchid 18
 Name:           spice-client
-Version:        0.4.2
-Release:        %{patchid}%{?dist}
+Version:        0.6.3
+# We started at 3 for RHEL-6.1, 2%{?dist}.x is for RHEL-6.0.z, 1 is for RHEL-5
+Release:        2%{?dist}.5
 Summary:        Implements the client side of the SPICE protocol
 Group:          User Interface/Desktops
-License:        GPLv2+
+License:        LGPLv2+
 URL:            http://www.spice-space.org/
-Source0:        %{tarname}-%{tarversion}.tar.bz2
-
-
-patch1: spice-client-01-add-command-line-options.patch
-patch2: spice-client-02-fix-dns-lookup.patch
-patch3: spice-client-03-add-ipv6-support.patch
-patch4: spice-client-04-only-use-AI_ADDRCONF-if-availible.patch
-patch5: spice-client-05-new-migration-process.patch
-patch6: spice-client-06-fix-handling-of-top-down-images.patch
-patch7: spice-client-07-install-spicec-in-usr-libexec.patch
-patch8: spice-client-08-add-foreign-menu.patch
-patch9: spice-client-09-add-controller.patch
-patch10: spice-client-10-fix-controller-foreign-menu-review-comments.patch
-patch11: spice-client-11-add-foreign-menu-fix-Makefile.in.patch
-patch12: spice-client-12-add-controller-fix-Makefile.in.patch
-patch13: spice-client-13-support-for-using-VS2008.patch
-patch14: spice-client-14-add-glext_proto-to-Makefile-am.patch
-patch15: spice-client-15-x11-fix-a-crash-calling-a-destroyed-window.patch
-patch16: spice-client-16-x11-initizlized-sock_len.patch
-patch17: spice-client-17-log-warnings-and-errors-to-stderr-too.patch
-patch18: spice-client-18-full-screen-do-not-resize-after-migration.patch
-patch19: spice-client-19-make-opengl-optional-disabled-by-default.patch
-patch20: spice-client-20-fix-unsafe-guest-host-data-handling.patch
-patch21: spice-client-21-socket-file.patch
-
+Source0:        http://www.spice-space.org/download/releases/spice-%{version}.tar.bz2
+Source1:        http://www.spice-space.org/download/releases/spice-protocol-%{version}.tar.bz2
+Patch0:         0001-spicec-x11-Change-source-of-controller-socket-name-f.patch
+Patch1:         0002-client-Interpret-the-title-control-message-as-utf8-i.patch
+Patch2:         0003-Remove-no-longer-used-wstring_printf-functions.patch
+Patch3:         0004-spicec-x11-Do-not-set-_NET_WM_USER_TIME-to-0-on-star.patch
+Patch4:         0005-spicec-Fix-info-layer-sometimes-not-showing.patch
+Patch5:         0006-spicec-x11-Add-a-few-missing-XLockDisplay-calls-rhbz.patch
+Patch6:         0007-spicec-x11-Fix-modifier-keys-getting-stuck-rhbz-6550.patch
+Patch7:         0008-spicec-x11-Fix-unhandled-exception-no-window-proc-cr.patch
+Patch8:         0009-spicec-Don-t-show-a-white-screen-if-guest-resolution.patch
 BuildRoot:      %{_tmppath}/%{tarname}-%{version}-%{release}-root-%(%{__id_u} -n)
-
 ExclusiveArch:  i686 x86_64
-
 BuildRequires:  gcc-c++
 BuildRequires:  pkgconfig
 BuildRequires:  alsa-lib-devel
+BuildRequires:  pixman-devel >= 0.18
+BuildRequires:  libjpeg-devel
 BuildRequires:  libXrandr-devel
 BuildRequires:  libXext-devel
-BuildRequires:  log4cpp-devel
+BuildRequires:  libXfixes-devel
 BuildRequires:  openssl-devel
 BuildRequires:  celt051-devel
-BuildRequires:  cairo-spice-devel
-BuildRequires:  ffmpeg-spice-devel
-BuildRequires:  spice-common-devel >= 0.4.2-4
-
-BuildRequires:  autoconf automake libtool
-
+Requires:       pixman >= 0.18
 
 %description
 The Simple Protocol for Independent Computing Environments (SPICE) is
@@ -63,46 +40,38 @@ variety of machine architectures.
 
 This package provides the client side of the SPICE protocol
 
-%prep
-%setup -q -n %{tarname}-%{tarversion}
 
-# Note that "patch -p2" is used, as patches are against spice/ and
-# not spice/client/.
-%patch1 -p2
-%patch2 -p2
-%patch3 -p2
-%patch4 -p2
-%patch5 -p2
-%patch6 -p2
-%patch7 -p2
-%patch8 -p2
-%patch9 -p2
-%patch10 -p2
-%patch11 -p2
-%patch12 -p2
-%patch13 -p2
-%patch14 -p2
-%patch15 -p2
-%patch16 -p2
-%patch17 -p2
-%patch18 -p2
-%patch19 -p2
-%patch20 -p2
-%patch21 -p1
+%prep
+%setup -q -n spice-%{version} -a 1
+%patch0 -p1
+%patch1 -p1
+%patch2 -p1
+%patch3 -p1
+%patch4 -p1
+%patch5 -p1
+%patch6 -p1
+%patch7 -p1
+%patch8 -p1
+
 
 %build
-autoreconf -i -f
-
-CFLAGS="%{optflags}"; CFLAGS="${CFLAGS/-Wall/}"; export CFLAGS;
-CXXFLAGS="%{optflags}"; CXXFLAGS="${CXXFLAGS/-Wall/}"; export CXXFLAGS;
-FFLAGS="%{optflags}"; FFLAGS="${FFLAGS/-Wall/}"; export FFLAGS;
-%configure PATCHID=%{patchid} DISTRIBUTION=%{?dist} --with-spice-common
-make %{?_smp_mflags}
+# generate spice-protocol.pc, to make spice configure happy
+pushd spice-protocol-%{version}
+./configure
+popd
+export CFLAGS="%{optflags} -I$(pwd)/spice-protocol-%{version}"
+export CXXFLAGS="%{optflags} -I$(pwd)/spice-protocol-%{version}"
+export PKG_CONFIG_PATH=$(pwd)/spice-protocol-%{version}
+%configure
+make -C client %{?_smp_mflags}
 
 
 %install
 rm -rf $RPM_BUILD_ROOT
-make install DESTDIR=$RPM_BUILD_ROOT
+make -C client install DESTDIR=$RPM_BUILD_ROOT
+# create libexec 0.4 compat link
+mkdir -p $RPM_BUILD_ROOT%{_libexecdir}
+ln -s %{_bindir}/spicec $RPM_BUILD_ROOT%{_libexecdir}/spicec
 
 
 %clean
@@ -110,11 +79,38 @@ rm -rf $RPM_BUILD_ROOT
 
 
 %files
-%defattr(-, root, root, 0755)
-%doc COPYING INSTALL README
+%defattr(-,root,root,-)
+%doc COPYING NEWS README
+%{_bindir}/spicec
 %{_libexecdir}/spicec
 
+
 %changelog
+* Thu Nov 25 2010 Hans de Goede <hdegoede@redhat.com> - 0.6.3-2.el6_0.5
+- Add fixes from upstream git for a number of serious bugs:
+  - ctrl / alt getting stuck
+  - a client hang
+  - a client crash
+  - showing nothing but a white screen in fullscreen mode
+  Related: rhbz#644840
+
+* Tue Nov 16 2010 Hans de Goede <hdegoede@redhat.com> - 0.6.3-2.el6_0.4
+- Add explicit Requires for pixman >= 0.18
+  Related: rhbz#644840
+
+* Tue Nov  9 2010 Hans de Goede <hdegoede@redhat.com> - 0.6.3-2.el6_0.3
+- Fix the watermark and sticky key notifications not being shown
+  Related: rhbz#644840
+
+* Thu Oct 21 2010 Hans de Goede <hdegoede@redhat.com> - 0.6.3-2.el6_0.2
+- Fix the spicec window not being on top when first shown
+  Related: rhbz#644840
+
+* Thu Oct 21 2010 Hans de Goede <hdegoede@redhat.com> - 0.6.3-2.el6_0.1
+- New upstream release 0.6.3
+- Fix setting window title from xpi
+  Resolves: rhbz#644840
+
 * Wed Aug 4 2010 Martin Stransky <stransky@redhat.com> - 0.4.2-18
 - fix spice-xpi/qspice-client unix socket race
   Resolves: #620444
